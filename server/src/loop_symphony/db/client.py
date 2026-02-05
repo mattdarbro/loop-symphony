@@ -195,11 +195,10 @@ class DatabaseClient:
             self.client.table("apps")
             .select("*")
             .eq("api_key", api_key)
-            .maybe_single()
             .execute()
         )
-        if result.data:
-            return App(**result.data)
+        if result.data and len(result.data) > 0:
+            return App(**result.data[0])
         return None
 
     async def get_or_create_user_profile(
@@ -222,12 +221,11 @@ class DatabaseClient:
             .select("*")
             .eq("app_id", str(app_id))
             .eq("external_user_id", external_user_id)
-            .maybe_single()
             .execute()
         )
 
-        if result.data:
-            return UserProfile(**result.data)
+        if result.data and len(result.data) > 0:
+            return UserProfile(**result.data[0])
 
         # Create new profile
         new_profile = (
@@ -321,11 +319,10 @@ class DatabaseClient:
             .select("*")
             .eq("id", str(heartbeat_id))
             .eq("app_id", str(app_id))
-            .maybe_single()
             .execute()
         )
-        if result.data:
-            return Heartbeat(**result.data)
+        if result.data and len(result.data) > 0:
+            return Heartbeat(**result.data[0])
         return None
 
     async def get_heartbeat_by_id(self, heartbeat_id: UUID) -> Heartbeat | None:
@@ -341,11 +338,10 @@ class DatabaseClient:
             self.client.table("heartbeats")
             .select("*")
             .eq("id", str(heartbeat_id))
-            .maybe_single()
             .execute()
         )
-        if result.data:
-            return Heartbeat(**result.data)
+        if result.data and len(result.data) > 0:
+            return Heartbeat(**result.data[0])
         return None
 
     async def update_heartbeat(
