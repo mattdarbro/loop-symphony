@@ -1,0 +1,31 @@
+# Git
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment
+.env
+.env.local
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+
+# Tests (not needed in production image)
+tests/
+
+# Docs
+*.md
+*.pdf
+
+# macOS
+.DS_Store
