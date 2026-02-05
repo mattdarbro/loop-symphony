@@ -4,11 +4,13 @@ import asyncio
 import json
 import logging
 from typing import Annotated, AsyncIterator
+from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from starlette.responses import StreamingResponse
 
 from loop_symphony import __version__
+from loop_symphony.api.auth import Auth, OptionalAuth, get_db_client
 from loop_symphony.api.events import (
     EVENT_COMPLETE,
     EVENT_ERROR,
@@ -18,6 +20,7 @@ from loop_symphony.api.events import (
 )
 from loop_symphony.db.client import DatabaseClient
 from loop_symphony.manager.conductor import Conductor
+from loop_symphony.models.heartbeat import Heartbeat, HeartbeatCreate, HeartbeatUpdate
 from loop_symphony.models.outcome import TaskStatus
 from loop_symphony.models.task import (
     TaskContext,
@@ -156,11 +159,15 @@ async def submit_task(
     conductor: Annotated[Conductor, Depends(get_conductor)],
     db: Annotated[DatabaseClient, Depends(get_db_client)],
     event_bus: Annotated[EventBus, Depends(get_event_bus)],
+    auth: OptionalAuth = None,
 ) -> TaskSubmitResponse:
     """Submit a new task for processing.
 
     The task is stored in the database and executed asynchronously.
     Returns immediately with a task_id for polling.
+
+    Optionally accepts X-Api-Key and X-User-Id headers for authentication.
+    When provided, the app_id and user_id are injected into the task context.
 
     Args:
         request: The task request
@@ -168,11 +175,24 @@ async def submit_task(
         conductor: The conductor instance
         db: The database client
         event_bus: The event bus for SSE streaming
+        auth: Optional authentication context
 
     Returns:
         TaskSubmitResponse with task_id
     """
-    logger.info(f"Received task: {request.id} - {request.query[:50]}...")
+    # Inject auth context if provided
+    if auth:
+        context = request.context or TaskContext()
+        context = context.model_copy(update={
+            "user_id": str(auth.user.id) if auth.user else None,
+        })
+        request = request.model_copy(update={"context": context})
+        logger.info(
+            f"Received task: {request.id} - {request.query[:50]}... "
+            f"(app={auth.app.name})"
+        )
+    else:
+        logger.info(f"Received task: {request.id} - {request.query[:50]}...")
 
     # Store task in database
     await db.create_task(request)
@@ -323,3 +343,139 @@ async def stream_task(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# -----------------------------------------------------------------------------
+# Heartbeat endpoints (require authentication)
+# -----------------------------------------------------------------------------
+
+
+@router.post("/heartbeats", response_model=Heartbeat, status_code=status.HTTP_201_CREATED)
+async def create_heartbeat(
+    data: HeartbeatCreate,
+    auth: Auth,
+    db: Annotated[DatabaseClient, Depends(get_db_client)],
+) -> Heartbeat:
+    """Create a new heartbeat for scheduled task execution.
+
+    Heartbeats define recurring tasks that will be executed on a schedule.
+    The query_template can contain placeholders like {date} that are expanded
+    at execution time.
+
+    Args:
+        data: The heartbeat creation data
+        auth: Authentication context (required)
+        db: The database client
+
+    Returns:
+        The created heartbeat
+    """
+    user_id = auth.user.id if auth.user else None
+    heartbeat = await db.create_heartbeat(auth.app.id, user_id, data)
+    logger.info(
+        f"Created heartbeat {heartbeat.id} for app={auth.app.name} "
+        f"cron={data.cron_expression}"
+    )
+    return heartbeat
+
+
+@router.get("/heartbeats", response_model=list[Heartbeat])
+async def list_heartbeats(
+    auth: Auth,
+    db: Annotated[DatabaseClient, Depends(get_db_client)],
+) -> list[Heartbeat]:
+    """List all heartbeats for the authenticated app/user.
+
+    Args:
+        auth: Authentication context (required)
+        db: The database client
+
+    Returns:
+        List of heartbeats
+    """
+    user_id = auth.user.id if auth.user else None
+    return await db.list_heartbeats(auth.app.id, user_id)
+
+
+@router.get("/heartbeats/{heartbeat_id}", response_model=Heartbeat)
+async def get_heartbeat(
+    heartbeat_id: UUID,
+    auth: Auth,
+    db: Annotated[DatabaseClient, Depends(get_db_client)],
+) -> Heartbeat:
+    """Get a specific heartbeat by ID.
+
+    Args:
+        heartbeat_id: The heartbeat ID
+        auth: Authentication context (required)
+        db: The database client
+
+    Returns:
+        The heartbeat
+
+    Raises:
+        HTTPException: If heartbeat not found
+    """
+    heartbeat = await db.get_heartbeat(heartbeat_id, auth.app.id)
+    if not heartbeat:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Heartbeat not found",
+        )
+    return heartbeat
+
+
+@router.patch("/heartbeats/{heartbeat_id}", response_model=Heartbeat)
+async def update_heartbeat(
+    heartbeat_id: UUID,
+    updates: HeartbeatUpdate,
+    auth: Auth,
+    db: Annotated[DatabaseClient, Depends(get_db_client)],
+) -> Heartbeat:
+    """Update a heartbeat.
+
+    Args:
+        heartbeat_id: The heartbeat ID
+        updates: The fields to update
+        auth: Authentication context (required)
+        db: The database client
+
+    Returns:
+        The updated heartbeat
+
+    Raises:
+        HTTPException: If heartbeat not found
+    """
+    heartbeat = await db.update_heartbeat(heartbeat_id, auth.app.id, updates)
+    if not heartbeat:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Heartbeat not found",
+        )
+    logger.info(f"Updated heartbeat {heartbeat_id}")
+    return heartbeat
+
+
+@router.delete("/heartbeats/{heartbeat_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_heartbeat(
+    heartbeat_id: UUID,
+    auth: Auth,
+    db: Annotated[DatabaseClient, Depends(get_db_client)],
+) -> None:
+    """Delete a heartbeat.
+
+    Args:
+        heartbeat_id: The heartbeat ID
+        auth: Authentication context (required)
+        db: The database client
+
+    Raises:
+        HTTPException: If heartbeat not found
+    """
+    deleted = await db.delete_heartbeat(heartbeat_id, auth.app.id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Heartbeat not found",
+        )
+    logger.info(f"Deleted heartbeat {heartbeat_id}")

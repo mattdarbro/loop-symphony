@@ -8,7 +8,7 @@
 
 ## Current State
 
-**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE.** 313 tests passing.
+**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE. Platform Identity: COMPLETE.** 347 tests passing.
 
 | Component | Status | Notes |
 |-----------|--------|-------|
@@ -35,9 +35,11 @@
 | Checkpoint emission | Done | Phase 2H — checkpoint_fn callback, GET /task/{id}/checkpoints |
 | SSE streaming | Done | Phase 2I — EventBus, GET /task/{id}/stream, late-joiner history replay |
 | Nested sub-loops | Done | Phase 2F — spawn_fn callback, depth tracking, DepthExceededError |
-| Test suite | Done | 313 tests passing |
+| Test suite | Done | 347 tests passing |
 | Registry in production path | Done | Phase E — routes.py creates ToolRegistry, passes to Conductor |
 | Deployment | Done | Phase 1A — Dockerfile, railway.toml, deployed to Railway |
+| Multi-app identity | Done | Platform — App, UserProfile models, X-Api-Key auth middleware |
+| Heartbeat scheduling | Done | Platform — Heartbeat CRUD endpoints, pg_cron migration ready |
 
 ### PRD Phase 2 items already shipped
 
@@ -373,29 +375,53 @@ python3 -m pytest tests/ -v
 
 ---
 
-## Platform Requirements (Future)
+## Platform Identity & Heartbeats -- COMPLETE
 
 > Loop Symphony is a **platform** serving multiple iOS apps, not a single-app backend.
 > These requirements emerged from planning Daily Briefing and Health Assistant apps.
 
-### Multi-App / Multi-User Identity
+### Multi-App / Multi-User Identity -- COMPLETE
 
-- [ ] `app_id` field on TaskRequest — identifies which iOS app is calling
-- [ ] `user_id` field on TaskContext — identifies user within that app
-- [ ] App-specific configuration (rate limits, enabled instruments, etc.)
+- [x] `App` model with api_key authentication
+- [x] `UserProfile` model per-app users (external_user_id from iOS)
+- [x] `AuthContext` combining app + optional user for requests
+- [x] `X-Api-Key` header authentication middleware
+- [x] `X-User-Id` header for user identification (auto-creates profiles)
+- [x] Optional auth on `/task` endpoint (backward compatible)
+- [x] Required auth on heartbeat endpoints
+- [x] App isolation via app_id checks in database queries
+- [x] Tests: 13 tests in `test_auth.py`
+
+**Files created:** `models/identity.py`, `api/auth.py`, `tests/test_auth.py`
+**Files modified:** `api/routes.py`, `api/__init__.py`, `models/__init__.py`
+
+### Heartbeats / Scheduled Check-ins -- COMPLETE
+
+- [x] `Heartbeat` model: recurring task definition with cron_expression
+- [x] `HeartbeatCreate`, `HeartbeatUpdate` for CRUD operations
+- [x] `HeartbeatRun` model for execution history
+- [x] Heartbeat CRUD endpoints: `POST/GET/PATCH/DELETE /heartbeats`
+- [x] Database methods in `db/client.py` for all heartbeat operations
+- [x] SQL migration for apps, user_profiles, heartbeats, heartbeat_runs tables
+- [x] pg_cron setup ready (commented, requires Supabase SQL editor)
+- [x] Tests: 21 tests in `test_heartbeat.py`
+
+**Files created:** `models/heartbeat.py`, `db/migrations/002_identity_heartbeats.sql`, `tests/test_heartbeat.py`
+**Files modified:** `db/client.py`
+
+### Future Platform Work
+
+- [ ] App-specific configuration (rate limits, enabled instruments)
 - [ ] Per-user persistent context across tasks (health history, preferences)
-
-### Heartbeats / Scheduled Check-ins
-
-- [ ] Cron-style scheduler for recurring tasks (per app, per user)
-- [ ] Heartbeat registration: app registers "run this composition every N hours"
+- [ ] Heartbeat worker to process pending runs (background task)
 - [ ] Results delivered via SSE stream or push notification
-- [ ] Ties into 3E (Autonomic Process Layer) and 3F (Semi-Autonomic)
 
-### Telegram Integration
+### Messaging Integration (On Ice)
+
+> Telegram/WhatsApp integration paused. May revisit later.
 
 - [ ] Telegram bot tool for sending alerts/messages
-- [ ] User links Telegram account to their user_id
+- [ ] User links messaging account to their user_id
 - [ ] Instruments can emit "notify user" as a side effect
 - [ ] Ties into 3I (Notification Layer)
 
@@ -408,7 +434,7 @@ iOS App -> wraps findings in personality (soul.md) -> presents to user
 ```
 
 The server doesn't need direct integrations with HealthKit/Calendar/etc — iOS handles I/O,
-server handles reasoning. Telegram is the exception (server-initiated outbound messages).
+server handles reasoning.
 
 ---
 
@@ -690,7 +716,7 @@ Phase 6 (Future)
 
 ## Quick Reference: What's Next
 
-**Phase 2 COMPLETE.** All items done:
+**Phase 2 + Platform Identity COMPLETE.** All items done:
 
 1. ~~**Phase E** -- Wire registry into `api/routes.py`~~ DONE
 2. ~~**1A** -- Deploy to Railway~~ DONE
@@ -702,5 +728,11 @@ Phase 6 (Future)
 8. ~~**2A** -- Vision Instrument~~ DONE
 9. ~~**2I** -- Streaming~~ DONE
 10. ~~**2F** -- Nested Sub-loops~~ DONE
+11. ~~**Platform Identity** -- Multi-app auth, user profiles~~ DONE
+12. ~~**Heartbeats** -- Scheduled task definitions, CRUD endpoints~~ DONE
 
-**Next:** Phase 3 (Autonomy) — see Platform Requirements section for priorities
+**Next:**
+- Run migration in Supabase (copy SQL from `db/migrations/002_identity_heartbeats.sql`)
+- Manually create first app in Supabase `apps` table
+- Implement heartbeat worker (process pending runs)
+- Phase 3 (Autonomy)

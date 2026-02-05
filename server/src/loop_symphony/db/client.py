@@ -3,10 +3,18 @@
 import logging
 from datetime import UTC, datetime
 from typing import Any
+from uuid import UUID
 
 from supabase import create_client, Client
 
 from loop_symphony.config import get_settings
+from loop_symphony.models.heartbeat import (
+    Heartbeat,
+    HeartbeatCreate,
+    HeartbeatRun,
+    HeartbeatUpdate,
+)
+from loop_symphony.models.identity import App, UserProfile
 from loop_symphony.models.outcome import TaskStatus
 from loop_symphony.models.task import TaskRequest, TaskResponse
 
@@ -169,3 +177,252 @@ class DatabaseClient:
         )
 
         return result.data
+
+    # -------------------------------------------------------------------------
+    # Identity methods
+    # -------------------------------------------------------------------------
+
+    async def get_app_by_api_key(self, api_key: str) -> App | None:
+        """Look up app by API key.
+
+        Args:
+            api_key: The API key to look up
+
+        Returns:
+            App if found, None otherwise
+        """
+        result = (
+            self.client.table("apps")
+            .select("*")
+            .eq("api_key", api_key)
+            .maybe_single()
+            .execute()
+        )
+        if result.data:
+            return App(**result.data)
+        return None
+
+    async def get_or_create_user_profile(
+        self,
+        app_id: UUID,
+        external_user_id: str,
+    ) -> UserProfile:
+        """Get existing user profile or create new one.
+
+        Args:
+            app_id: The app ID
+            external_user_id: The external user ID from the iOS app
+
+        Returns:
+            The user profile
+        """
+        # Try to find existing profile
+        result = (
+            self.client.table("user_profiles")
+            .select("*")
+            .eq("app_id", str(app_id))
+            .eq("external_user_id", external_user_id)
+            .maybe_single()
+            .execute()
+        )
+
+        if result.data:
+            return UserProfile(**result.data)
+
+        # Create new profile
+        new_profile = (
+            self.client.table("user_profiles")
+            .insert({
+                "app_id": str(app_id),
+                "external_user_id": external_user_id,
+            })
+            .execute()
+        )
+        return UserProfile(**new_profile.data[0])
+
+    async def update_user_last_seen(self, user_id: UUID) -> None:
+        """Update user's last_seen_at timestamp.
+
+        Args:
+            user_id: The user profile ID
+        """
+        self.client.table("user_profiles").update({
+            "last_seen_at": datetime.now(UTC).isoformat(),
+        }).eq("id", str(user_id)).execute()
+
+    # -------------------------------------------------------------------------
+    # Heartbeat methods
+    # -------------------------------------------------------------------------
+
+    async def create_heartbeat(
+        self,
+        app_id: UUID,
+        user_id: UUID | None,
+        data: HeartbeatCreate,
+    ) -> Heartbeat:
+        """Create a new heartbeat.
+
+        Args:
+            app_id: The app ID
+            user_id: Optional user ID (None for app-wide heartbeats)
+            data: The heartbeat creation data
+
+        Returns:
+            The created heartbeat
+        """
+        insert_data = {
+            "app_id": str(app_id),
+            "user_id": str(user_id) if user_id else None,
+            **data.model_dump(),
+        }
+        result = self.client.table("heartbeats").insert(insert_data).execute()
+        return Heartbeat(**result.data[0])
+
+    async def list_heartbeats(
+        self,
+        app_id: UUID,
+        user_id: UUID | None = None,
+    ) -> list[Heartbeat]:
+        """List heartbeats for an app/user.
+
+        Args:
+            app_id: The app ID
+            user_id: Optional user ID to filter by
+
+        Returns:
+            List of heartbeats
+        """
+        query = (
+            self.client.table("heartbeats")
+            .select("*")
+            .eq("app_id", str(app_id))
+        )
+        if user_id:
+            query = query.eq("user_id", str(user_id))
+        result = query.order("created_at", desc=True).execute()
+        return [Heartbeat(**row) for row in result.data]
+
+    async def get_heartbeat(
+        self,
+        heartbeat_id: UUID,
+        app_id: UUID,
+    ) -> Heartbeat | None:
+        """Get a specific heartbeat (with app_id check for isolation).
+
+        Args:
+            heartbeat_id: The heartbeat ID
+            app_id: The app ID (for isolation check)
+
+        Returns:
+            Heartbeat if found, None otherwise
+        """
+        result = (
+            self.client.table("heartbeats")
+            .select("*")
+            .eq("id", str(heartbeat_id))
+            .eq("app_id", str(app_id))
+            .maybe_single()
+            .execute()
+        )
+        if result.data:
+            return Heartbeat(**result.data)
+        return None
+
+    async def get_heartbeat_by_id(self, heartbeat_id: UUID) -> Heartbeat | None:
+        """Get a heartbeat by ID (no app isolation check).
+
+        Args:
+            heartbeat_id: The heartbeat ID
+
+        Returns:
+            Heartbeat if found, None otherwise
+        """
+        result = (
+            self.client.table("heartbeats")
+            .select("*")
+            .eq("id", str(heartbeat_id))
+            .maybe_single()
+            .execute()
+        )
+        if result.data:
+            return Heartbeat(**result.data)
+        return None
+
+    async def update_heartbeat(
+        self,
+        heartbeat_id: UUID,
+        app_id: UUID,
+        updates: HeartbeatUpdate,
+    ) -> Heartbeat | None:
+        """Update a heartbeat.
+
+        Args:
+            heartbeat_id: The heartbeat ID
+            app_id: The app ID (for isolation check)
+            updates: The fields to update
+
+        Returns:
+            Updated heartbeat if found, None otherwise
+        """
+        update_data = updates.model_dump(exclude_none=True)
+        update_data["updated_at"] = datetime.now(UTC).isoformat()
+
+        result = (
+            self.client.table("heartbeats")
+            .update(update_data)
+            .eq("id", str(heartbeat_id))
+            .eq("app_id", str(app_id))
+            .execute()
+        )
+        if result.data:
+            return Heartbeat(**result.data[0])
+        return None
+
+    async def delete_heartbeat(self, heartbeat_id: UUID, app_id: UUID) -> bool:
+        """Delete a heartbeat.
+
+        Args:
+            heartbeat_id: The heartbeat ID
+            app_id: The app ID (for isolation check)
+
+        Returns:
+            True if deleted, False if not found
+        """
+        result = (
+            self.client.table("heartbeats")
+            .delete()
+            .eq("id", str(heartbeat_id))
+            .eq("app_id", str(app_id))
+            .execute()
+        )
+        return len(result.data) > 0
+
+    async def get_pending_heartbeat_runs(self) -> list[HeartbeatRun]:
+        """Get pending heartbeat runs for processing.
+
+        Returns:
+            List of pending heartbeat runs
+        """
+        result = (
+            self.client.table("heartbeat_runs")
+            .select("*")
+            .eq("status", "pending")
+            .order("created_at")
+            .execute()
+        )
+        return [HeartbeatRun(**row) for row in result.data]
+
+    async def update_heartbeat_run(
+        self,
+        run_id: UUID,
+        updates: dict[str, Any],
+    ) -> None:
+        """Update a heartbeat run status.
+
+        Args:
+            run_id: The heartbeat run ID
+            updates: Fields to update
+        """
+        self.client.table("heartbeat_runs").update(updates).eq(
+            "id", str(run_id)
+        ).execute()
