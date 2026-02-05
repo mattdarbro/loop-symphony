@@ -19,6 +19,9 @@ class TaskContext(BaseModel):
     location: str | None = None
     input_results: list[dict] | None = None
     checkpoint_fn: Any = Field(default=None, exclude=True)
+    spawn_fn: Any = Field(default=None, exclude=True)
+    depth: int = 0
+    max_depth: int = 3
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -28,6 +31,7 @@ class TaskPreferences(BaseModel):
     thoroughness: Literal["quick", "balanced", "thorough"] = "balanced"
     trust_level: int = Field(default=0, ge=0, le=2)  # 0=supervised, 1=semi, 2=auto
     notify_on_complete: bool = True
+    max_spawn_depth: int | None = None
 
 
 class TaskRequest(BaseModel):

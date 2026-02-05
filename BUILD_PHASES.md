@@ -8,7 +8,7 @@
 
 ## Current State
 
-**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2A-2D, 2G-2I: COMPLETE.** 292 tests passing.
+**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE.** 313 tests passing.
 
 | Component | Status | Notes |
 |-----------|--------|-------|
@@ -34,9 +34,10 @@
 | Process visibility types | Done | Phase 2G — ProcessType enum (AUTONOMIC, SEMI_AUTONOMIC, CONSCIOUS) |
 | Checkpoint emission | Done | Phase 2H — checkpoint_fn callback, GET /task/{id}/checkpoints |
 | SSE streaming | Done | Phase 2I — EventBus, GET /task/{id}/stream, late-joiner history replay |
-| Test suite | Done | 292 tests passing |
+| Nested sub-loops | Done | Phase 2F — spawn_fn callback, depth tracking, DepthExceededError |
+| Test suite | Done | 313 tests passing |
 | Registry in production path | Done | Phase E — routes.py creates ToolRegistry, passes to Conductor |
-| Deployment | Not done | No Dockerfile, no Railway config |
+| Deployment | Done | Phase 1A — Dockerfile, railway.toml, deployed to Railway |
 
 ### PRD Phase 2 items already shipped
 
@@ -257,19 +258,26 @@ composition specs, not as a standalone phase.
 
 **Depends on:** 2B (synthesis for fan-in), 2C (shares composition.py and execute_composition)
 
-### 2F: Nested Sub-loops
+### 2F: Nested Sub-loops -- COMPLETE
 
 > PRD 8.2: A loop can spawn sub-loops. Bounded depth (default max 3).
 
-- [ ] Add to `TaskContext`: `depth: int = 0`, `max_depth: int = 3`
-- [ ] Conductor provides `spawn(sub_query, sub_context) -> InstrumentResult` callback
-  - Increments depth, checks max_depth, raises `DepthExceededError` if exceeded
-  - Executes sub-task through the normal conductor path
-- [ ] Instruments receive spawn callback via execution context (not import)
-- [ ] Tests: nested execution, depth limiting, result propagation
+- [x] `exceptions.py` — NEW: `DepthExceededError` with current_depth/max_depth
+- [x] Add to `TaskContext`: `depth: int = 0`, `max_depth: int = 3`, `spawn_fn`
+- [x] Add to `TaskPreferences`: `max_spawn_depth: int | None` for per-request override
+- [x] Conductor.execute() creates `spawn_fn` closure that:
+  - Increments depth, checks against max_depth
+  - Raises `DepthExceededError` if exceeded
+  - Builds sub-context preserving checkpoint_fn and other fields
+  - Executes sub-task recursively through conductor
+  - Returns `InstrumentResult` (not TaskResponse)
+- [x] Instruments receive spawn callback via `context.spawn_fn` (not import)
+- [x] Tests: 21 new tests covering exception, context fields, injection, depth enforcement, propagation
+
+**Files created:** `exceptions.py`, `tests/test_spawn.py`
+**Files modified:** `models/task.py`, `manager/conductor.py`, `__init__.py`
 
 **Depends on:** 2C (shares the callback-injection pattern)
-**Highest complexity in Phase 2.** Should be last.
 
 ### 2G: Process Visibility Types -- COMPLETE
 
@@ -362,6 +370,45 @@ python3 -m pytest tests/ -v
 - [ ] Sequential and parallel composition work reliably
 - [ ] Streaming works for conscious processes
 - [ ] Trust levels affect behavior as specified (deferred to 3D)
+
+---
+
+## Platform Requirements (Future)
+
+> Loop Symphony is a **platform** serving multiple iOS apps, not a single-app backend.
+> These requirements emerged from planning Daily Briefing and Health Assistant apps.
+
+### Multi-App / Multi-User Identity
+
+- [ ] `app_id` field on TaskRequest — identifies which iOS app is calling
+- [ ] `user_id` field on TaskContext — identifies user within that app
+- [ ] App-specific configuration (rate limits, enabled instruments, etc.)
+- [ ] Per-user persistent context across tasks (health history, preferences)
+
+### Heartbeats / Scheduled Check-ins
+
+- [ ] Cron-style scheduler for recurring tasks (per app, per user)
+- [ ] Heartbeat registration: app registers "run this composition every N hours"
+- [ ] Results delivered via SSE stream or push notification
+- [ ] Ties into 3E (Autonomic Process Layer) and 3F (Semi-Autonomic)
+
+### Telegram Integration
+
+- [ ] Telegram bot tool for sending alerts/messages
+- [ ] User links Telegram account to their user_id
+- [ ] Instruments can emit "notify user" as a side effect
+- [ ] Ties into 3I (Notification Layer)
+
+### Data Flow Model
+
+```
+iOS App -> collects data (HealthKit, calendar, social) -> packages into TaskRequest.context
+Server  -> reasons over data -> returns structured findings
+iOS App -> wraps findings in personality (soul.md) -> presents to user
+```
+
+The server doesn't need direct integrations with HealthKit/Calendar/etc — iOS handles I/O,
+server handles reasoning. Telegram is the exception (server-initiated outbound messages).
 
 ---
 
@@ -643,8 +690,10 @@ Phase 6 (Future)
 
 ## Quick Reference: What's Next
 
+**Phase 2 COMPLETE.** All items done:
+
 1. ~~**Phase E** -- Wire registry into `api/routes.py`~~ DONE
-2. **1A** -- Deploy to Railway (independent)
+2. ~~**1A** -- Deploy to Railway~~ DONE
 3. ~~**2B** -- Synthesis Instrument~~ DONE
 4. ~~**2C** -- Sequential Composition + Parameterization~~ DONE
 5. ~~**2G** -- Process Types~~ DONE
@@ -652,4 +701,6 @@ Phase 6 (Future)
 7. ~~**2D** -- Parallel Composition~~ DONE
 8. ~~**2A** -- Vision Instrument~~ DONE
 9. ~~**2I** -- Streaming~~ DONE
-10. **2F** -- Nested Sub-loops (last, highest complexity)
+10. ~~**2F** -- Nested Sub-loops~~ DONE
+
+**Next:** Phase 3 (Autonomy) — see Platform Requirements section for priorities

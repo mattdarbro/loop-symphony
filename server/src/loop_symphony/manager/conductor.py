@@ -4,6 +4,7 @@ import logging
 import re
 import time
 
+from loop_symphony.exceptions import DepthExceededError
 from loop_symphony.instruments.base import BaseInstrument, InstrumentResult
 from loop_symphony.instruments.note import NoteInstrument
 from loop_symphony.instruments.research import ResearchInstrument
@@ -232,11 +233,91 @@ class Conductor:
         """
         start_time = time.time()
 
+        # Get or create context
+        context = request.context or TaskContext()
+        current_depth = context.depth
+
+        # Determine max_depth: preference override > context > default
+        max_depth = context.max_depth
+        if request.preferences and request.preferences.max_spawn_depth is not None:
+            max_depth = request.preferences.max_spawn_depth
+
+        # Create spawn callback
+        async def _spawn(
+            sub_query: str,
+            sub_context: TaskContext | None = None,
+        ) -> InstrumentResult:
+            """Spawn a sub-task at incremented depth.
+
+            Args:
+                sub_query: The query for the sub-task
+                sub_context: Optional context to merge (e.g., input_results)
+
+            Returns:
+                InstrumentResult from the sub-task
+
+            Raises:
+                DepthExceededError: If spawning would exceed max_depth
+            """
+            new_depth = current_depth + 1
+            if new_depth > max_depth:
+                raise DepthExceededError(new_depth, max_depth)
+
+            # Build sub-context from current, optionally merge sub_context fields
+            base = context.model_copy(update={
+                "depth": new_depth,
+                "max_depth": max_depth,
+                "spawn_fn": None,  # Will be re-injected by recursive call
+            })
+
+            if sub_context is not None:
+                merge = {}
+                if sub_context.input_results is not None:
+                    merge["input_results"] = sub_context.input_results
+                if sub_context.conversation_summary is not None:
+                    merge["conversation_summary"] = sub_context.conversation_summary
+                if sub_context.attachments:
+                    merge["attachments"] = sub_context.attachments
+                if merge:
+                    base = base.model_copy(update=merge)
+
+            sub_request = TaskRequest(
+                query=sub_query,
+                context=base,
+                preferences=request.preferences,
+            )
+
+            # Recursive execution
+            sub_response = await self.execute(sub_request)
+
+            # Convert TaskResponse to InstrumentResult
+            return InstrumentResult(
+                outcome=sub_response.outcome,
+                findings=sub_response.findings,
+                summary=sub_response.summary,
+                confidence=sub_response.confidence,
+                iterations=sub_response.metadata.iterations,
+                sources_consulted=sub_response.metadata.sources_consulted,
+                discrepancy=sub_response.discrepancy,
+                suggested_followups=sub_response.suggested_followups,
+            )
+
+        # Inject spawn_fn into context
+        enriched_context = context.model_copy(update={
+            "spawn_fn": _spawn,
+            "depth": current_depth,
+            "max_depth": max_depth,
+        })
+        request = request.model_copy(update={"context": enriched_context})
+
         # Route to appropriate instrument
         instrument_name = await self.analyze_and_route(request)
         instrument = self.instruments[instrument_name]
 
-        logger.info(f"Executing task {request.id} with {instrument_name} instrument")
+        logger.info(
+            f"Executing task {request.id} with {instrument_name} instrument "
+            f"(depth={current_depth}/{max_depth})"
+        )
 
         # Execute the instrument
         result: InstrumentResult = await instrument.execute(
