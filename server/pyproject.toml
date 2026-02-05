@@ -12,6 +12,7 @@ dependencies = [
     "httpx>=0.26.0",
     "supabase>=2.3.0",
     "python-dotenv>=1.0.0",
+    "croniter>=2.0.0",
 ]
 
 [project.optional-dependencies]

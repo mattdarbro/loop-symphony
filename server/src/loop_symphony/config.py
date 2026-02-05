@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     research_confidence_threshold: float = 0.8
     research_confidence_delta_threshold: float = 0.05
 
+    # Autonomic layer settings
+    autonomic_enabled: bool = False  # Set to True to enable background scheduler
+    autonomic_heartbeat_interval: int = 60  # Seconds between heartbeat ticks
+    autonomic_health_interval: int = 300  # Seconds between health checks
+
 
 @lru_cache
 def get_settings() -> Settings:

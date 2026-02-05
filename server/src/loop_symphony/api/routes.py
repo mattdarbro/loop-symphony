@@ -20,6 +20,7 @@ from loop_symphony.api.events import (
 )
 from loop_symphony.db.client import DatabaseClient
 from loop_symphony.manager.conductor import Conductor
+from loop_symphony.manager.heartbeat_worker import HeartbeatWorker
 from loop_symphony.models.heartbeat import Heartbeat, HeartbeatCreate, HeartbeatUpdate
 from loop_symphony.models.outcome import TaskStatus
 from loop_symphony.models.task import (
@@ -42,6 +43,7 @@ _conductor: Conductor | None = None
 _registry: ToolRegistry | None = None
 _db_client: DatabaseClient | None = None
 _event_bus: EventBus | None = None
+_heartbeat_worker: HeartbeatWorker | None = None
 
 
 def _build_registry() -> ToolRegistry:
@@ -75,6 +77,17 @@ def get_event_bus() -> EventBus:
     if _event_bus is None:
         _event_bus = EventBus()
     return _event_bus
+
+
+def get_heartbeat_worker() -> HeartbeatWorker:
+    """Get or create heartbeat worker instance."""
+    global _heartbeat_worker
+    if _heartbeat_worker is None:
+        _heartbeat_worker = HeartbeatWorker(
+            db=get_db_client(),
+            conductor=get_conductor(),
+        )
+    return _heartbeat_worker
 
 
 async def execute_task_background(
@@ -395,6 +408,84 @@ async def list_heartbeats(
     """
     user_id = auth.user.id if auth.user else None
     return await db.list_heartbeats(auth.app.id, user_id)
+
+
+# -----------------------------------------------------------------------------
+# Heartbeat tick/status endpoints (must be before parameterized routes)
+# -----------------------------------------------------------------------------
+
+
+@router.post("/heartbeats/tick")
+async def heartbeat_tick(
+    worker: Annotated[HeartbeatWorker, Depends(get_heartbeat_worker)],
+) -> dict:
+    """Process all due heartbeats.
+
+    This endpoint checks all active heartbeats, determines which are due
+    based on their cron expressions, and executes them.
+
+    Can be called:
+    - Manually via curl for testing
+    - By an external scheduler (cron, Railway cron, etc.)
+    - By the autonomic layer's background scheduler
+
+    Returns:
+        Summary of processed and skipped heartbeats
+    """
+    return await worker.tick()
+
+
+@router.get("/heartbeats/status")
+async def heartbeat_status(
+    worker: Annotated[HeartbeatWorker, Depends(get_heartbeat_worker)],
+) -> dict:
+    """Get status of all active heartbeats.
+
+    Returns information about each heartbeat including when it last ran
+    and when it's next due.
+
+    Returns:
+        List of heartbeat statuses
+    """
+    from croniter import croniter
+    from datetime import datetime, UTC
+
+    result = (
+        worker.db.client.table("heartbeats")
+        .select("*")
+        .eq("is_active", True)
+        .execute()
+    )
+
+    heartbeats = [Heartbeat(**row) for row in result.data]
+    statuses = []
+
+    for hb in heartbeats:
+        last_run = await worker.get_last_run_at(hb.id)
+        now = datetime.now(UTC)
+
+        try:
+            cron = croniter(hb.cron_expression, now)
+            next_run = cron.get_next(datetime)
+        except Exception:
+            next_run = None
+
+        statuses.append({
+            "id": str(hb.id),
+            "name": hb.name,
+            "cron_expression": hb.cron_expression,
+            "is_active": hb.is_active,
+            "last_run_at": last_run.isoformat() if last_run else None,
+            "next_scheduled": next_run.isoformat() if next_run else None,
+            "is_due": worker._is_heartbeat_due(hb, last_run),
+        })
+
+    return {"heartbeats": statuses}
+
+
+# -----------------------------------------------------------------------------
+# Heartbeat CRUD with ID parameter
+# -----------------------------------------------------------------------------
 
 
 @router.get("/heartbeats/{heartbeat_id}", response_model=Heartbeat)
