@@ -2,9 +2,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copy application code and install
+# Copy full server directory structure (hatchling needs src/loop_symphony/)
 COPY server/pyproject.toml .
-COPY server/src/ src/
+COPY server/src/loop_symphony/ src/loop_symphony/
 RUN pip install --no-cache-dir .
 
 # Create non-root user
