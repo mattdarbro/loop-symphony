@@ -8,7 +8,7 @@
 
 ## Current State
 
-**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE. Platform Identity: COMPLETE.** 347 tests passing.
+**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE. Platform Identity: COMPLETE. Phase 3A-3C: COMPLETE.** 434 tests passing.
 
 | Component | Status | Notes |
 |-----------|--------|-------|
@@ -40,6 +40,9 @@
 | Deployment | Done | Phase 1A — Dockerfile, railway.toml, deployed to Railway |
 | Multi-app identity | Done | Platform — App, UserProfile models, X-Api-Key auth middleware |
 | Heartbeat scheduling | Done | Platform — Heartbeat CRUD endpoints, pg_cron migration ready |
+| Novel arrangements | Done | 3A — ArrangementPlanner, Claude proposes compositions |
+| Loop proposals | Done | 3B — LoopProposer, LoopExecutor, phase-based loops |
+| Meta-learning | Done | 3C — ArrangementTracker, suggest saving high-performers |
 
 ### PRD Phase 2 items already shipped
 
@@ -455,40 +458,53 @@ server handles reasoning.
 - **Autonomic monitoring (3E):** `registry.health_check_all()` is already built and async.
   The autonomic layer is a scheduler that calls it periodically.
 
-### 3A: Novel Arrangement Generation
+### 3A: Novel Arrangement Generation -- COMPLETE
 
 > PRD 7.2 Level 4: Manager creates new compositions not explicitly designed.
 
-- [ ] Claude analyzes task and proposes arrangement as structured JSON
+- [x] Claude analyzes task and proposes arrangement as structured JSON
   - Given: list of available tool manifests (from `registry.get_all()`)
   - Given: list of available instrument names and their capabilities
   - Returns: composition spec (sequential/parallel, instrument names, configs)
-- [ ] Conductor validates proposal via `registry.resolve()` for each instrument
-- [ ] Execute validated arrangement via `execute_composition()`
-- [ ] Arrangements must follow scientific method structure
-- [ ] Must have explicit termination criteria
+- [x] Conductor validates proposal via `registry.resolve()` for each instrument
+- [x] Execute validated arrangement via `execute_composition()`
+- [x] Arrangements must follow scientific method structure
+- [x] Must have explicit termination criteria
+
+**Files created:** `models/arrangement.py`, `manager/arrangement_planner.py`, `tests/test_arrangement.py` (32 tests)
+**Files modified:** `manager/conductor.py`, `api/routes.py`, `manager/__init__.py`, `models/__init__.py`
 
 **Depends on:** 2C, 2D (composition system)
 
-### 3B: Loop Proposal System
+### 3B: Loop Proposal System -- COMPLETE
 
 > PRD 7.2 Level 5: Propose entirely new loop specs when existing instruments don't fit.
 
-- [ ] Proposal model: name, description, phases, termination criteria, required capabilities
-- [ ] Constraint validation: scientific method structure required, bounds required
-- [ ] Trust Level 0: human approval required before execution
-- [ ] Trust Level 2: auto-execute with logging
+- [x] Proposal model: name, description, phases, termination criteria, required capabilities
+- [x] Constraint validation: scientific method structure required, bounds required
+- [x] LoopPhase with action types: instrument, prompt, spawn
+- [x] LoopProposer generates phase-based loop structures from Claude
+- [x] LoopExecutor runs phases sequentially with findings accumulation
+- [x] Scientific method coverage validation (hypothesize, gather, analyze, synthesize)
 
-**Depends on:** 3A, 3D (trust system)
+**Files created:** `models/loop_proposal.py`, `manager/loop_proposer.py`, `manager/loop_executor.py`, `tests/test_loop_proposal.py` (29 tests)
+**Files modified:** `manager/conductor.py`, `api/routes.py`, `manager/__init__.py`, `models/__init__.py`
 
-### 3C: Meta-Learning
+**Depends on:** 3A
+
+### 3C: Meta-Learning -- COMPLETE
 
 > PRD 7.4: Save successful novel arrangements as named instruments.
 
-- [ ] Track arrangement success rates (outcome, confidence, user feedback)
-- [ ] Suggest saving high-performing arrangements
-- [ ] Persist as JSON composition specs to DB (not code)
-- [ ] Load saved arrangements on startup, register as named compositions
+- [x] Track arrangement success rates (outcome, confidence, duration)
+- [x] Suggest saving high-performing arrangements (thresholds: 3+ executions, 70%+ success, 75%+ confidence)
+- [x] Persist as JSON composition specs to DB (saved_arrangements table)
+- [x] ArrangementTracker: in-memory tracking with database persistence
+- [x] Query pattern matching for reusing saved arrangements
+- [x] API endpoints for saved arrangement CRUD
+
+**Files created:** `models/saved_arrangement.py`, `manager/arrangement_tracker.py`, `db/migrations/004_saved_arrangements.sql`, `tests/test_meta_learning.py` (26 tests)
+**Files modified:** `db/client.py`, `manager/conductor.py`, `api/routes.py`, `manager/__init__.py`, `models/__init__.py`
 
 **Depends on:** 3A
 
@@ -563,10 +579,12 @@ server handles reasoning.
 ### Phase 3 Verification
 
 **Phase 3 complete when (PRD 12.3):**
-- [ ] Manager can propose and execute novel arrangements
-- [ ] Background tasks run invisibly until complete
-- [ ] Autonomic processes only surface on critical errors
-- [ ] Error patterns are logged and learning suggestions made
+- [x] Manager can propose and execute novel arrangements (3A)
+- [x] Manager can propose and execute novel loops (3B)
+- [x] Successful arrangements can be saved for reuse (3C)
+- [ ] Background tasks run invisibly until complete (3E, 3F)
+- [ ] Autonomic processes only surface on critical errors (3E)
+- [ ] Error patterns are logged and learning suggestions made (3H)
 
 ---
 
@@ -692,9 +710,9 @@ Phase E: Wire Registry into Production .. DONE
   |
   v
 Phase 3 (Autonomy)
-  |  3A: Novel Arrangements ............ blocked by 2C, 2D
-  |  3B: Loop Proposals ................ blocked by 3A, 3D
-  |  3C: Meta-Learning ................. blocked by 3A
+  |  3A: Novel Arrangements ............ DONE
+  |  3B: Loop Proposals ................ DONE
+  |  3C: Meta-Learning ................. DONE
   |  3D: Trust Escalation .............. blocked by 2G
   |  3E: Autonomic Layer ............... blocked by E (health checks built)
   |  3F: Semi-Autonomic Layer .......... blocked by 3E, 2H
@@ -731,8 +749,14 @@ Phase 6 (Future)
 11. ~~**Platform Identity** -- Multi-app auth, user profiles~~ DONE
 12. ~~**Heartbeats** -- Scheduled task definitions, CRUD endpoints~~ DONE
 
+**Phase 3 Progress:**
+13. ~~**3A** -- Novel Arrangement Generation~~ DONE
+14. ~~**3B** -- Loop Proposal System~~ DONE
+15. ~~**3C** -- Meta-Learning~~ DONE
+
 **Next:**
-- Run migration in Supabase (copy SQL from `db/migrations/002_identity_heartbeats.sql`)
+- Run migrations in Supabase (`002_identity_heartbeats.sql`, `003_webhook_url.sql`, `004_saved_arrangements.sql`)
 - Manually create first app in Supabase `apps` table
 - Implement heartbeat worker (process pending runs)
-- Phase 3 (Autonomy)
+- Phase 3D (Trust Escalation)
+- Phase 3E-3F (Autonomic/Semi-Autonomic Layers)

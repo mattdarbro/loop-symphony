@@ -26,6 +26,7 @@ from loop_symphony.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
     from loop_symphony.manager.arrangement_planner import ArrangementPlanner
+    from loop_symphony.manager.arrangement_tracker import ArrangementTracker
     from loop_symphony.manager.loop_executor import LoopExecutor
     from loop_symphony.manager.loop_proposer import LoopProposer
 
@@ -103,6 +104,7 @@ class Conductor:
         self._planner: ArrangementPlanner | None = None
         self._loop_proposer: LoopProposer | None = None
         self._loop_executor: LoopExecutor | None = None
+        self._tracker: ArrangementTracker | None = None
         if registry is not None:
             self.instruments: dict[str, BaseInstrument] = {
                 "note": self._build_instrument("note"),
@@ -160,6 +162,18 @@ class Conductor:
 
             self._loop_executor = LoopExecutor(claude=claude, conductor=self)
         return self._loop_executor
+
+    def _get_tracker(self) -> ArrangementTracker:
+        """Lazy initialization of arrangement tracker."""
+        if self._tracker is None:
+            from loop_symphony.manager.arrangement_tracker import ArrangementTracker
+            self._tracker = ArrangementTracker()
+        return self._tracker
+
+    @property
+    def tracker(self) -> ArrangementTracker:
+        """Public access to the arrangement tracker."""
+        return self._get_tracker()
 
     def _build_instrument(self, name: str) -> BaseInstrument:
         """Build an instrument with tools resolved from the registry."""
@@ -501,7 +515,16 @@ class Conductor:
 
         duration_ms = int((time.time() - start_time) * 1000)
 
-        return TaskResponse(
+        # Track execution for meta-learning
+        self.tracker.record_execution(
+            arrangement=proposal,
+            task_id=request.id,
+            outcome=result.outcome.value,
+            confidence=result.confidence,
+            duration_ms=duration_ms,
+        )
+
+        response = TaskResponse(
             request_id=request.id,
             outcome=result.outcome,
             findings=result.findings,
@@ -517,6 +540,16 @@ class Conductor:
             discrepancy=result.discrepancy,
             suggested_followups=result.suggested_followups,
         )
+
+        # Check if we should suggest saving this arrangement
+        suggestion = self.tracker.get_suggestion(proposal)
+        if suggestion:
+            logger.info(
+                f"Suggesting to save arrangement: {suggestion.suggested_name} "
+                f"(success_rate={suggestion.success_rate:.2f})"
+            )
+
+        return response
 
     async def execute_novel(self, request: TaskRequest) -> TaskResponse:
         """Plan and execute a novel arrangement for a task.
@@ -651,7 +684,16 @@ class Conductor:
 
         duration_ms = int((time.time() - start_time) * 1000)
 
-        return TaskResponse(
+        # Track execution for meta-learning
+        self.tracker.record_execution(
+            arrangement=proposal,
+            task_id=request.id,
+            outcome=result.outcome.value,
+            confidence=result.confidence,
+            duration_ms=duration_ms,
+        )
+
+        response = TaskResponse(
             request_id=request.id,
             outcome=result.outcome,
             findings=result.findings,
@@ -667,6 +709,16 @@ class Conductor:
             discrepancy=result.discrepancy,
             suggested_followups=result.suggested_followups,
         )
+
+        # Check if we should suggest saving this loop
+        suggestion = self.tracker.get_suggestion(proposal)
+        if suggestion:
+            logger.info(
+                f"Suggesting to save loop: {suggestion.suggested_name} "
+                f"(success_rate={suggestion.success_rate:.2f})"
+            )
+
+        return response
 
     async def execute_proposed_loop(self, request: TaskRequest) -> TaskResponse:
         """Propose and execute a custom loop for a task.

@@ -422,3 +422,163 @@ class DatabaseClient:
         self.client.table("heartbeat_runs").update(updates).eq(
             "id", str(run_id)
         ).execute()
+
+    # -------------------------------------------------------------------------
+    # Saved Arrangement methods (Phase 3C: Meta-Learning)
+    # -------------------------------------------------------------------------
+
+    async def create_saved_arrangement(
+        self,
+        arrangement_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Create a saved arrangement.
+
+        Args:
+            arrangement_data: The arrangement data to save
+
+        Returns:
+            The created arrangement record
+        """
+        result = (
+            self.client.table("saved_arrangements")
+            .insert(arrangement_data)
+            .execute()
+        )
+        return result.data[0]
+
+    async def list_saved_arrangements(
+        self,
+        app_id: UUID | None = None,
+    ) -> list[dict[str, Any]]:
+        """List saved arrangements.
+
+        Args:
+            app_id: Optional app ID to filter by (includes global arrangements)
+
+        Returns:
+            List of saved arrangement records
+        """
+        query = (
+            self.client.table("saved_arrangements")
+            .select("*")
+            .eq("is_active", True)
+        )
+
+        if app_id is not None:
+            # Include global (app_id is null) and app-specific
+            query = query.or_(f"app_id.is.null,app_id.eq.{app_id}")
+
+        result = query.order("created_at", desc=True).execute()
+        return result.data
+
+    async def get_saved_arrangement(
+        self,
+        arrangement_id: UUID,
+    ) -> dict[str, Any] | None:
+        """Get a saved arrangement by ID.
+
+        Args:
+            arrangement_id: The arrangement ID
+
+        Returns:
+            The arrangement record or None
+        """
+        result = (
+            self.client.table("saved_arrangements")
+            .select("*")
+            .eq("id", str(arrangement_id))
+            .execute()
+        )
+        if result.data and len(result.data) > 0:
+            return result.data[0]
+        return None
+
+    async def get_saved_arrangement_by_name(
+        self,
+        name: str,
+        app_id: UUID | None = None,
+    ) -> dict[str, Any] | None:
+        """Get a saved arrangement by name.
+
+        Args:
+            name: The arrangement name
+            app_id: Optional app ID
+
+        Returns:
+            The arrangement record or None
+        """
+        query = (
+            self.client.table("saved_arrangements")
+            .select("*")
+            .eq("name", name)
+            .eq("is_active", True)
+        )
+
+        if app_id is not None:
+            query = query.or_(f"app_id.is.null,app_id.eq.{app_id}")
+
+        result = query.execute()
+        if result.data and len(result.data) > 0:
+            return result.data[0]
+        return None
+
+    async def update_saved_arrangement(
+        self,
+        arrangement_id: UUID,
+        updates: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Update a saved arrangement.
+
+        Args:
+            arrangement_id: The arrangement ID
+            updates: Fields to update
+
+        Returns:
+            The updated arrangement or None
+        """
+        updates["updated_at"] = datetime.now(UTC).isoformat()
+        result = (
+            self.client.table("saved_arrangements")
+            .update(updates)
+            .eq("id", str(arrangement_id))
+            .execute()
+        )
+        if result.data and len(result.data) > 0:
+            return result.data[0]
+        return None
+
+    async def delete_saved_arrangement(
+        self,
+        arrangement_id: UUID,
+    ) -> bool:
+        """Delete (soft-delete) a saved arrangement.
+
+        Args:
+            arrangement_id: The arrangement ID
+
+        Returns:
+            True if deleted, False if not found
+        """
+        result = (
+            self.client.table("saved_arrangements")
+            .update({"is_active": False, "updated_at": datetime.now(UTC).isoformat()})
+            .eq("id", str(arrangement_id))
+            .execute()
+        )
+        return len(result.data) > 0
+
+    async def update_arrangement_stats(
+        self,
+        arrangement_id: UUID,
+        stats: dict[str, Any],
+    ) -> None:
+        """Update arrangement statistics.
+
+        Args:
+            arrangement_id: The arrangement ID
+            stats: The stats to update
+        """
+        self.client.table("saved_arrangements").update({
+            "stats": stats,
+            "updated_at": datetime.now(UTC).isoformat(),
+        }).eq("id", str(arrangement_id)).execute()

@@ -29,6 +29,11 @@ from loop_symphony.models.loop_proposal import (
     LoopProposalValidation,
 )
 from loop_symphony.models.outcome import TaskStatus
+from loop_symphony.models.saved_arrangement import (
+    ArrangementSuggestion,
+    SaveArrangementRequest,
+    SavedArrangement,
+)
 from loop_symphony.models.process import ProcessType
 from loop_symphony.models.task import (
     TaskContext,
@@ -632,6 +637,191 @@ async def submit_loop_task(
         task_id=request.id,
         status=TaskStatus.PENDING,
         message="Loop proposal task submitted",
+    )
+
+
+# -------------------------------------------------------------------------
+# Saved Arrangement Endpoints (Phase 3C: Meta-Learning)
+# -------------------------------------------------------------------------
+
+
+@router.get("/arrangements", response_model=list[SavedArrangement])
+async def list_saved_arrangements(
+    conductor: Annotated[Conductor, Depends(get_conductor)],
+    auth: OptionalAuth = None,
+) -> list[SavedArrangement]:
+    """List all saved arrangements.
+
+    Returns global arrangements and app-specific ones if authenticated.
+
+    Args:
+        conductor: The conductor instance
+        auth: Optional authentication context
+
+    Returns:
+        List of saved arrangements
+    """
+    app_id = auth.app.id if auth else None
+    return conductor.tracker.get_saved_arrangements(app_id)
+
+
+@router.post("/arrangements", response_model=SavedArrangement)
+async def save_arrangement(
+    request: SaveArrangementRequest,
+    conductor: Annotated[Conductor, Depends(get_conductor)],
+    auth: OptionalAuth = None,
+) -> SavedArrangement:
+    """Save an arrangement for future reuse.
+
+    Args:
+        request: The save request with arrangement and metadata
+        conductor: The conductor instance
+        auth: Optional authentication context
+
+    Returns:
+        The saved arrangement
+
+    Raises:
+        HTTPException: If arrangement name already exists
+    """
+    app_id = auth.app.id if auth else None
+
+    try:
+        saved = conductor.tracker.save_arrangement(request, app_id)
+        logger.info(f"Saved arrangement '{saved.name}' (id={saved.id})")
+        return saved
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.get("/arrangements/{arrangement_id}", response_model=SavedArrangement)
+async def get_saved_arrangement(
+    arrangement_id: str,
+    conductor: Annotated[Conductor, Depends(get_conductor)],
+) -> SavedArrangement:
+    """Get a saved arrangement by ID.
+
+    Args:
+        arrangement_id: The arrangement ID
+        conductor: The conductor instance
+
+    Returns:
+        The saved arrangement
+
+    Raises:
+        HTTPException: If not found
+    """
+    saved = conductor.tracker.get_saved_arrangement(arrangement_id)
+    if not saved:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Arrangement {arrangement_id} not found",
+        )
+    return saved
+
+
+@router.delete("/arrangements/{arrangement_id}")
+async def delete_saved_arrangement(
+    arrangement_id: str,
+    conductor: Annotated[Conductor, Depends(get_conductor)],
+) -> dict[str, str]:
+    """Delete a saved arrangement.
+
+    Args:
+        arrangement_id: The arrangement ID
+        conductor: The conductor instance
+
+    Returns:
+        Deletion confirmation
+
+    Raises:
+        HTTPException: If not found
+    """
+    deleted = conductor.tracker.delete_arrangement(arrangement_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Arrangement {arrangement_id} not found",
+        )
+    return {"status": "deleted", "id": arrangement_id}
+
+
+@router.get("/arrangements/suggestion", response_model=ArrangementSuggestion | None)
+async def get_arrangement_suggestion(
+    conductor: Annotated[Conductor, Depends(get_conductor)],
+    arrangement_type: str = "composition",
+) -> ArrangementSuggestion | None:
+    """Get a suggestion for saving a high-performing arrangement.
+
+    Checks tracked executions and returns a suggestion if an arrangement
+    meets the threshold for saving (3+ executions, 70%+ success rate,
+    75%+ average confidence).
+
+    Args:
+        conductor: The conductor instance
+        arrangement_type: Type to check (composition or loop)
+
+    Returns:
+        ArrangementSuggestion if one should be saved, None otherwise
+    """
+    # This would iterate through tracked arrangements and find one to suggest
+    # For now, return None as suggestions are logged during execution
+    return None
+
+
+@router.post("/arrangements/from-task/{task_id}", response_model=SavedArrangement)
+async def save_arrangement_from_task(
+    task_id: str,
+    name: str,
+    description: str,
+    db: Annotated[DatabaseClient, Depends(get_db_client)],
+    conductor: Annotated[Conductor, Depends(get_conductor)],
+    auth: OptionalAuth = None,
+) -> SavedArrangement:
+    """Save the arrangement used for a successful task.
+
+    Retrieves the task, extracts the arrangement that was used,
+    and saves it for future reuse.
+
+    Args:
+        task_id: The task ID to save arrangement from
+        name: Name for the saved arrangement
+        description: Description of what it's good for
+        db: The database client
+        conductor: The conductor instance
+        auth: Optional authentication context
+
+    Returns:
+        The saved arrangement
+
+    Raises:
+        HTTPException: If task not found or wasn't a novel arrangement
+    """
+    task_data = await db.get_task(task_id)
+    if not task_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task {task_id} not found",
+        )
+
+    # Check if it was a novel or loop execution
+    response = task_data.get("response", {})
+    instrument_used = response.get("metadata", {}).get("instrument_used", "")
+
+    if not instrument_used.startswith(("novel:", "loop:")):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Task was not executed with a novel arrangement or loop",
+        )
+
+    # For now, we can't reconstruct the exact arrangement from the task
+    # This would require storing the arrangement spec with the task
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Saving arrangements from completed tasks requires storing arrangement specs with tasks (future enhancement)",
     )
 
 

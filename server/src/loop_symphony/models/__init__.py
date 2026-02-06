@@ -12,6 +12,13 @@ from loop_symphony.models.loop_proposal import (
     LoopProposal,
     LoopProposalValidation,
 )
+from loop_symphony.models.saved_arrangement import (
+    ArrangementExecution,
+    ArrangementStats,
+    ArrangementSuggestion,
+    SaveArrangementRequest,
+    SavedArrangement,
+)
 from loop_symphony.models.heartbeat import (
     Heartbeat,
     HeartbeatCreate,
@@ -33,8 +40,11 @@ from loop_symphony.models.task import (
 
 __all__ = [
     "App",
+    "ArrangementExecution",
     "ArrangementProposal",
+    "ArrangementStats",
     "ArrangementStep",
+    "ArrangementSuggestion",
     "ArrangementValidation",
     "AuthContext",
     "ExecutionMetadata",
@@ -49,6 +59,8 @@ __all__ = [
     "LoopProposal",
     "LoopProposalValidation",
     "Outcome",
+    "SaveArrangementRequest",
+    "SavedArrangement",
     "Source",
     "TaskContext",
     "TaskPendingResponse",
