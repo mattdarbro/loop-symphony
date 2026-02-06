@@ -23,6 +23,11 @@ from loop_symphony.manager.conductor import Conductor
 from loop_symphony.manager.heartbeat_worker import HeartbeatWorker
 from loop_symphony.models.arrangement import ArrangementProposal, ArrangementValidation
 from loop_symphony.models.heartbeat import Heartbeat, HeartbeatCreate, HeartbeatUpdate
+from loop_symphony.models.loop_proposal import (
+    LoopExecutionPlan,
+    LoopProposal,
+    LoopProposalValidation,
+)
 from loop_symphony.models.outcome import TaskStatus
 from loop_symphony.models.process import ProcessType
 from loop_symphony.models.task import (
@@ -477,6 +482,156 @@ async def submit_novel_task(
         task_id=request.id,
         status=TaskStatus.PENDING,
         message="Novel arrangement task submitted",
+    )
+
+
+# -------------------------------------------------------------------------
+# Loop Proposal Endpoints (Phase 3B)
+# -------------------------------------------------------------------------
+
+
+@router.post("/task/loop/propose", response_model=LoopProposal)
+async def propose_loop(
+    request: TaskRequest,
+    conductor: Annotated[Conductor, Depends(get_conductor)],
+) -> LoopProposal:
+    """Propose a new loop type for a task without executing.
+
+    Level 5 creativity: Claude designs entirely new loop specifications
+    with custom phases when existing instruments don't fit.
+
+    Args:
+        request: The task request to design a loop for
+        conductor: The conductor instance
+
+    Returns:
+        LoopProposal with custom loop specification
+    """
+    logger.info(f"Proposing loop for: {request.query[:50]}...")
+    proposal = await conductor.propose_loop(request.query)
+    return proposal
+
+
+@router.post("/task/loop/validate", response_model=LoopProposalValidation)
+async def validate_loop_proposal(
+    proposal: LoopProposal,
+    conductor: Annotated[Conductor, Depends(get_conductor)],
+) -> LoopProposalValidation:
+    """Validate a loop proposal.
+
+    Checks scientific method coverage, valid instruments,
+    termination criteria, and iteration bounds.
+
+    Args:
+        proposal: The loop proposal to validate
+        conductor: The conductor instance
+
+    Returns:
+        LoopProposalValidation with errors, warnings, and coverage
+    """
+    validation = conductor.validate_loop_proposal(proposal)
+    return validation
+
+
+@router.post("/task/loop/plan", response_model=LoopExecutionPlan)
+async def get_loop_plan(
+    proposal: LoopProposal,
+    conductor: Annotated[Conductor, Depends(get_conductor)],
+) -> LoopExecutionPlan:
+    """Get an execution plan for a loop proposal.
+
+    Returns validation results and execution estimates.
+    Used for trust_level=0 approval workflow.
+
+    Args:
+        proposal: The loop proposal
+        conductor: The conductor instance
+
+    Returns:
+        LoopExecutionPlan with estimates and validation
+    """
+    plan = conductor.get_loop_execution_plan(proposal)
+    return plan
+
+
+@router.post("/task/loop", response_model=TaskSubmitResponse)
+async def submit_loop_task(
+    request: TaskRequest,
+    background_tasks: BackgroundTasks,
+    conductor: Annotated[Conductor, Depends(get_conductor)],
+    db: Annotated[DatabaseClient, Depends(get_db_client)],
+    event_bus: Annotated[EventBus, Depends(get_event_bus)],
+    auth: OptionalAuth = None,
+) -> TaskSubmitResponse:
+    """Submit a task using loop proposal generation.
+
+    Claude proposes and executes a custom loop specification.
+    This is "Level 5 creativity" from the PRD - entirely new loop types.
+
+    Args:
+        request: The task request
+        background_tasks: FastAPI background tasks
+        conductor: The conductor instance
+        db: The database client
+        event_bus: The event bus for SSE streaming
+        auth: Optional authentication context
+
+    Returns:
+        TaskSubmitResponse with task_id
+    """
+    # Inject auth context if provided
+    if auth:
+        context = request.context or TaskContext()
+        context = context.model_copy(update={
+            "user_id": str(auth.user.id) if auth.user else None,
+        })
+        request = request.model_copy(update={"context": context})
+        logger.info(
+            f"Received loop task: {request.id} - {request.query[:50]}... "
+            f"(app={auth.app.name})"
+        )
+    else:
+        logger.info(f"Received loop task: {request.id} - {request.query[:50]}...")
+
+    # Create task record
+    await db.create_task(request)
+
+    # Schedule loop proposal execution
+    async def execute_loop_background():
+        try:
+            await db.update_task_status(request.id, TaskStatus.RUNNING)
+            event_bus.emit(request.id, EVENT_STARTED, {"task_id": request.id})
+
+            response = await conductor.execute_proposed_loop(request)
+
+            await db.update_task_response(request.id, response)
+            await db.update_task_status(request.id, TaskStatus.COMPLETE)
+            event_bus.emit(request.id, EVENT_COMPLETE, {
+                "task_id": request.id,
+                "outcome": response.outcome.value,
+                "confidence": response.confidence,
+            })
+
+            logger.info(
+                f"Loop task {request.id} complete: "
+                f"outcome={response.outcome.value}, "
+                f"loop={response.metadata.instrument_used}"
+            )
+        except Exception as e:
+            logger.error(f"Loop task {request.id} failed: {e}")
+            await db.update_task_status(request.id, TaskStatus.FAILED)
+            await db.update_task_error(request.id, str(e))
+            event_bus.emit(request.id, EVENT_ERROR, {
+                "task_id": request.id,
+                "error": str(e),
+            })
+
+    background_tasks.add_task(execute_loop_background)
+
+    return TaskSubmitResponse(
+        task_id=request.id,
+        status=TaskStatus.PENDING,
+        message="Loop proposal task submitted",
     )
 
 

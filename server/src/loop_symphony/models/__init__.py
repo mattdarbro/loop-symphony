@@ -6,6 +6,12 @@ from loop_symphony.models.arrangement import (
     ArrangementValidation,
 )
 from loop_symphony.models.finding import ExecutionMetadata, Finding, Source
+from loop_symphony.models.loop_proposal import (
+    LoopExecutionPlan,
+    LoopPhase,
+    LoopProposal,
+    LoopProposalValidation,
+)
 from loop_symphony.models.heartbeat import (
     Heartbeat,
     HeartbeatCreate,
@@ -38,6 +44,10 @@ __all__ = [
     "HeartbeatRun",
     "HeartbeatStatus",
     "HeartbeatUpdate",
+    "LoopExecutionPlan",
+    "LoopPhase",
+    "LoopProposal",
+    "LoopProposalValidation",
     "Outcome",
     "Source",
     "TaskContext",

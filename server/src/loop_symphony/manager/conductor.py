@@ -15,12 +15,19 @@ from loop_symphony.instruments.synthesis import SynthesisInstrument
 from loop_symphony.instruments.vision import VisionInstrument
 from loop_symphony.models.arrangement import ArrangementProposal, ArrangementValidation
 from loop_symphony.models.finding import ExecutionMetadata
+from loop_symphony.models.loop_proposal import (
+    LoopExecutionPlan,
+    LoopProposal,
+    LoopProposalValidation,
+)
 from loop_symphony.models.process import ProcessType
 from loop_symphony.models.task import TaskContext, TaskRequest, TaskResponse
 from loop_symphony.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
     from loop_symphony.manager.arrangement_planner import ArrangementPlanner
+    from loop_symphony.manager.loop_executor import LoopExecutor
+    from loop_symphony.manager.loop_proposer import LoopProposer
 
 logger = logging.getLogger(__name__)
 
@@ -88,12 +95,14 @@ class Conductor:
     """The conductor orchestrates task execution.
 
     Analyzes incoming tasks and routes them to the appropriate instrument.
-    Supports novel arrangement generation (Phase 3A).
+    Supports novel arrangement generation (Phase 3A) and loop proposals (Phase 3B).
     """
 
     def __init__(self, *, registry: ToolRegistry | None = None) -> None:
         self.registry = registry
         self._planner: ArrangementPlanner | None = None
+        self._loop_proposer: LoopProposer | None = None
+        self._loop_executor: LoopExecutor | None = None
         if registry is not None:
             self.instruments: dict[str, BaseInstrument] = {
                 "note": self._build_instrument("note"),
@@ -123,6 +132,34 @@ class Conductor:
 
             self._planner = ArrangementPlanner(claude=claude, registry=self.registry)
         return self._planner
+
+    def _get_loop_proposer(self) -> LoopProposer:
+        """Lazy initialization of loop proposer."""
+        if self._loop_proposer is None:
+            from loop_symphony.manager.loop_proposer import LoopProposer
+            from loop_symphony.tools.claude import ClaudeClient
+
+            if self.registry is not None:
+                claude = self.registry.get_by_capability("reasoning")
+            else:
+                claude = ClaudeClient()
+
+            self._loop_proposer = LoopProposer(claude=claude)
+        return self._loop_proposer
+
+    def _get_loop_executor(self) -> LoopExecutor:
+        """Lazy initialization of loop executor."""
+        if self._loop_executor is None:
+            from loop_symphony.manager.loop_executor import LoopExecutor
+            from loop_symphony.tools.claude import ClaudeClient
+
+            if self.registry is not None:
+                claude = self.registry.get_by_capability("reasoning")
+            else:
+                claude = ClaudeClient()
+
+            self._loop_executor = LoopExecutor(claude=claude, conductor=self)
+        return self._loop_executor
 
     def _build_instrument(self, name: str) -> BaseInstrument:
         """Build an instrument with tools resolved from the registry."""
@@ -516,3 +553,153 @@ class Conductor:
 
         # Execute the arrangement
         return await self.execute_arrangement(proposal, request)
+
+    # -------------------------------------------------------------------------
+    # Loop Proposal Methods (Phase 3B)
+    # -------------------------------------------------------------------------
+
+    async def propose_loop(self, query: str) -> LoopProposal:
+        """Propose a new loop type for a query.
+
+        Level 5 creativity: designs entirely new loop specifications
+        when existing instruments don't fit.
+
+        Args:
+            query: The user's task query
+
+        Returns:
+            LoopProposal with custom loop specification
+        """
+        proposer = self._get_loop_proposer()
+        return await proposer.propose(query)
+
+    def validate_loop_proposal(
+        self, proposal: LoopProposal
+    ) -> LoopProposalValidation:
+        """Validate a loop proposal.
+
+        Checks scientific method coverage, valid instruments,
+        termination criteria, and iteration bounds.
+
+        Args:
+            proposal: The loop proposal to validate
+
+        Returns:
+            LoopProposalValidation with errors and warnings
+        """
+        proposer = self._get_loop_proposer()
+        return proposer.validate(proposal)
+
+    def get_loop_execution_plan(
+        self, proposal: LoopProposal
+    ) -> LoopExecutionPlan:
+        """Get an execution plan for a loop proposal.
+
+        Used for trust_level=0 to show the user what will happen.
+
+        Args:
+            proposal: The loop proposal
+
+        Returns:
+            LoopExecutionPlan with estimates and validation
+        """
+        proposer = self._get_loop_proposer()
+        validation = proposer.validate(proposal)
+        estimates = proposer.get_execution_estimate(proposal)
+
+        return LoopExecutionPlan(
+            proposal=proposal,
+            validation=validation,
+            estimated_iterations=estimates["estimated_iterations"],
+            estimated_duration_seconds=estimates["estimated_duration_seconds"],
+            requires_approval=True,
+        )
+
+    async def execute_loop_proposal(
+        self,
+        proposal: LoopProposal,
+        request: TaskRequest,
+    ) -> TaskResponse:
+        """Execute a validated loop proposal.
+
+        Args:
+            proposal: The validated loop proposal
+            request: The task request
+
+        Returns:
+            TaskResponse with results
+
+        Raises:
+            ValueError: If proposal is invalid
+        """
+        validation = self.validate_loop_proposal(proposal)
+        if not validation.valid:
+            raise ValueError(f"Invalid loop proposal: {validation.errors}")
+
+        start_time = time.time()
+
+        logger.info(
+            f"Executing loop proposal '{proposal.name}' for task {request.id}"
+        )
+
+        executor = self._get_loop_executor()
+        result = await executor.execute(
+            proposal,
+            request.query,
+            request.context,
+        )
+
+        duration_ms = int((time.time() - start_time) * 1000)
+
+        return TaskResponse(
+            request_id=request.id,
+            outcome=result.outcome,
+            findings=result.findings,
+            summary=result.summary,
+            confidence=result.confidence,
+            metadata=ExecutionMetadata(
+                instrument_used=f"loop:{proposal.name}",
+                iterations=result.iterations,
+                duration_ms=duration_ms,
+                sources_consulted=result.sources_consulted,
+                process_type=ProcessType.CONSCIOUS,
+            ),
+            discrepancy=result.discrepancy,
+            suggested_followups=result.suggested_followups,
+        )
+
+    async def execute_proposed_loop(self, request: TaskRequest) -> TaskResponse:
+        """Propose and execute a custom loop for a task.
+
+        High-level entry point for loop proposal execution.
+        Proposes a loop, validates it, and executes it.
+
+        Args:
+            request: The task request
+
+        Returns:
+            TaskResponse with results
+        """
+        logger.info(f"Proposing loop for task {request.id}")
+
+        # Propose the loop
+        proposal = await self.propose_loop(request.query)
+
+        # Validate
+        validation = self.validate_loop_proposal(proposal)
+        if not validation.valid:
+            logger.error(f"Invalid loop proposal: {validation.errors}")
+            # Fall back to novel arrangement
+            return await self.execute_novel(request)
+
+        if validation.warnings:
+            for warning in validation.warnings:
+                logger.warning(f"Loop proposal warning: {warning}")
+
+        logger.info(
+            f"Executing proposed loop: name={proposal.name}, "
+            f"phases={len(proposal.phases)}"
+        )
+
+        # Execute the loop
+        return await self.execute_loop_proposal(proposal, request)
