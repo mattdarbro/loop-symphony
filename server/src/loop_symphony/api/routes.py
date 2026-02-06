@@ -43,6 +43,8 @@ from loop_symphony.models.task import (
     TaskResponse,
     TaskSubmitResponse,
 )
+from loop_symphony.models.trust import TrustLevelUpdate, TrustMetrics, TrustSuggestion
+from loop_symphony.manager.trust_tracker import TrustTracker
 from loop_symphony.tools.claude import ClaudeClient
 from loop_symphony.tools.registry import ToolRegistry
 from loop_symphony.tools.tavily import TavilyClient
@@ -57,6 +59,7 @@ _registry: ToolRegistry | None = None
 _db_client: DatabaseClient | None = None
 _event_bus: EventBus | None = None
 _heartbeat_worker: HeartbeatWorker | None = None
+_trust_tracker: TrustTracker | None = None
 
 
 def _build_registry() -> ToolRegistry:
@@ -101,6 +104,14 @@ def get_heartbeat_worker() -> HeartbeatWorker:
             conductor=get_conductor(),
         )
     return _heartbeat_worker
+
+
+def get_trust_tracker() -> TrustTracker:
+    """Get or create trust tracker instance."""
+    global _trust_tracker
+    if _trust_tracker is None:
+        _trust_tracker = TrustTracker()
+    return _trust_tracker
 
 
 async def execute_task_background(
@@ -152,6 +163,19 @@ async def execute_task_background(
 
         # Update database with result
         await db.complete_task(request.id, response)
+
+        # Track trust metrics if we have app context
+        context = request.context
+        if context and context.app_id:
+            try:
+                trust_tracker = get_trust_tracker()
+                trust_tracker.record_outcome(
+                    app_id=UUID(context.app_id),
+                    outcome=response.outcome,
+                    user_id=UUID(context.user_id) if context.user_id else None,
+                )
+            except Exception as trust_err:
+                logger.warning(f"Failed to track trust metrics: {trust_err}")
 
         event_bus.emit(request.id, {
             "event": EVENT_COMPLETE,
@@ -231,6 +255,7 @@ async def submit_task(
     if auth:
         context = request.context or TaskContext()
         context = context.model_copy(update={
+            "app_id": str(auth.app.id),
             "user_id": str(auth.user.id) if auth.user else None,
         })
         request = request.model_copy(update={"context": context})
@@ -1169,3 +1194,75 @@ async def delete_heartbeat(
             detail="Heartbeat not found",
         )
     logger.info(f"Deleted heartbeat {heartbeat_id}")
+
+
+# -------------------------------------------------------------------------
+# Trust Escalation Endpoints (Phase 3D)
+# -------------------------------------------------------------------------
+
+
+@router.get("/trust/metrics", response_model=TrustMetrics)
+async def get_trust_metrics(
+    auth: Auth,
+    trust_tracker: Annotated[TrustTracker, Depends(get_trust_tracker)],
+) -> TrustMetrics:
+    """Get trust metrics for the current user/app.
+
+    Returns execution counts, success rates, and current trust level.
+
+    Args:
+        auth: Authentication context (required)
+        trust_tracker: The trust tracker instance
+
+    Returns:
+        TrustMetrics for the user/app
+    """
+    user_id = auth.user.id if auth.user else None
+    return trust_tracker.get_metrics(auth.app.id, user_id)
+
+
+@router.get("/trust/suggestion", response_model=TrustSuggestion | None)
+async def get_trust_suggestion(
+    auth: Auth,
+    trust_tracker: Annotated[TrustTracker, Depends(get_trust_tracker)],
+) -> TrustSuggestion | None:
+    """Get a suggestion to upgrade trust level if warranted.
+
+    Based on success patterns:
+    - Level 0 -> 1: 5+ consecutive successes, 80%+ success rate
+    - Level 1 -> 2: 10+ consecutive successes, 90%+ success rate
+
+    Args:
+        auth: Authentication context (required)
+        trust_tracker: The trust tracker instance
+
+    Returns:
+        TrustSuggestion if upgrade is warranted, None otherwise
+    """
+    user_id = auth.user.id if auth.user else None
+    return trust_tracker.get_suggestion(auth.app.id, user_id)
+
+
+@router.put("/trust/level", response_model=TrustMetrics)
+async def update_trust_level(
+    update: TrustLevelUpdate,
+    auth: Auth,
+    trust_tracker: Annotated[TrustTracker, Depends(get_trust_tracker)],
+) -> TrustMetrics:
+    """Update the trust level for the current user/app.
+
+    This is a user-initiated action to change their preferred trust level.
+    The server stores this preference and uses it for future suggestions.
+
+    Args:
+        update: The new trust level (0, 1, or 2)
+        auth: Authentication context (required)
+        trust_tracker: The trust tracker instance
+
+    Returns:
+        Updated TrustMetrics
+    """
+    user_id = auth.user.id if auth.user else None
+    return trust_tracker.update_trust_level(
+        auth.app.id, update.trust_level, user_id
+    )

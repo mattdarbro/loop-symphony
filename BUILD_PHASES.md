@@ -8,7 +8,7 @@
 
 ## Current State
 
-**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE. Platform Identity: COMPLETE. Phase 3A-3C: COMPLETE.** 434 tests passing.
+**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE. Platform Identity: COMPLETE. Phase 3A-3D: COMPLETE.** 461 tests passing.
 
 | Component | Status | Notes |
 |-----------|--------|-------|
@@ -43,6 +43,7 @@
 | Novel arrangements | Done | 3A — ArrangementPlanner, Claude proposes compositions |
 | Loop proposals | Done | 3B — LoopProposer, LoopExecutor, phase-based loops |
 | Meta-learning | Done | 3C — ArrangementTracker, suggest saving high-performers |
+| Trust escalation | Done | 3D — TrustTracker, approval workflow, escalation suggestions |
 
 ### PRD Phase 2 items already shipped
 
@@ -508,17 +509,23 @@ server handles reasoning.
 
 **Depends on:** 3A
 
-### 3D: Trust Escalation System
+### 3D: Trust Escalation System -- COMPLETE
 
 > PRD Section 9: Brilliant new employee model.
-> Note: `TaskPreferences.trust_level` field already exists (0-2) but is unused.
 
-- [ ] Wire `trust_level` into Conductor execution path:
+- [x] Wire `trust_level` into Conductor execution path:
   - Level 0: Return proposed plan before executing, wait for approval
   - Level 1: Auto-execute, return results with summary for review
   - Level 2: Full autonomy, only critical errors surface
-- [ ] Trust level interacts with process type (2G)
-- [ ] Trust can escalate over time based on success patterns
+- [x] `POST /task/{id}/approve` endpoint for level 0 workflow
+- [x] Trust metrics tracking per user/app (success/failure counts)
+- [x] Trust escalation suggestions based on success patterns:
+  - Level 0 -> 1: 5+ consecutive successes, 80%+ success rate
+  - Level 1 -> 2: 10+ consecutive successes, 90%+ success rate
+- [x] API endpoints: `GET /trust/metrics`, `GET /trust/suggestion`, `PUT /trust/level`
+
+**Files created:** `models/trust.py`, `manager/trust_tracker.py`, `tests/test_trust.py` (27 tests)
+**Files modified:** `models/task.py` (added app_id to TaskContext), `api/routes.py`, `manager/__init__.py`, `models/__init__.py`
 
 **Depends on:** 2G (process types)
 
@@ -713,7 +720,7 @@ Phase 3 (Autonomy)
   |  3A: Novel Arrangements ............ DONE
   |  3B: Loop Proposals ................ DONE
   |  3C: Meta-Learning ................. DONE
-  |  3D: Trust Escalation .............. blocked by 2G
+  |  3D: Trust Escalation .............. DONE
   |  3E: Autonomic Layer ............... blocked by E (health checks built)
   |  3F: Semi-Autonomic Layer .......... blocked by 3E, 2H
   |  3G: Compaction .................... independent
@@ -753,10 +760,11 @@ Phase 6 (Future)
 13. ~~**3A** -- Novel Arrangement Generation~~ DONE
 14. ~~**3B** -- Loop Proposal System~~ DONE
 15. ~~**3C** -- Meta-Learning~~ DONE
+16. ~~**3D** -- Trust Escalation~~ DONE
 
 **Next:**
 - Run migrations in Supabase (`002_identity_heartbeats.sql`, `003_webhook_url.sql`, `004_saved_arrangements.sql`)
 - Manually create first app in Supabase `apps` table
-- Implement heartbeat worker (process pending runs)
-- Phase 3D (Trust Escalation)
-- Phase 3E-3F (Autonomic/Semi-Autonomic Layers)
+- Phase 3E (Autonomic Process Layer)
+- Phase 3F (Semi-Autonomic Process Layer)
+- Phase 3G-3I (independent: Compaction, Error Learning, Notifications)

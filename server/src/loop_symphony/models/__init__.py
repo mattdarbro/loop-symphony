@@ -28,6 +28,7 @@ from loop_symphony.models.heartbeat import (
 )
 from loop_symphony.models.identity import App, AuthContext, UserProfile
 from loop_symphony.models.outcome import Outcome
+from loop_symphony.models.trust import TrustLevelUpdate, TrustMetrics, TrustSuggestion
 from loop_symphony.models.task import (
     TaskContext,
     TaskPendingResponse,
@@ -69,5 +70,8 @@ __all__ = [
     "TaskRequest",
     "TaskResponse",
     "TaskSubmitResponse",
+    "TrustLevelUpdate",
+    "TrustMetrics",
+    "TrustSuggestion",
     "UserProfile",
 ]

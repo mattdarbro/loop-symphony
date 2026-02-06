@@ -13,6 +13,7 @@ from loop_symphony.models.outcome import Outcome, TaskStatus
 class TaskContext(BaseModel):
     """Context provided with a task request."""
 
+    app_id: str | None = None  # For multi-tenant isolation
     user_id: str | None = None
     conversation_summary: str | None = None
     attachments: list[str] = Field(default_factory=list)
