@@ -8,7 +8,7 @@
 
 ## Current State
 
-**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE. Platform Identity: COMPLETE. Phase 3A-3E: COMPLETE.** 484 tests passing.
+**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE. Platform Identity: COMPLETE. Phase 3A-3F: COMPLETE.** 506 tests passing.
 
 | Component | Status | Notes |
 |-----------|--------|-------|
@@ -45,6 +45,7 @@
 | Meta-learning | Done | 3C — ArrangementTracker, suggest saving high-performers |
 | Trust escalation | Done | 3D — TrustTracker, approval workflow, escalation suggestions |
 | Autonomic layer | Done | 3E — Background scheduler, health monitoring, pain response |
+| Semi-autonomic layer | Done | 3F — TaskManager, active task queries, cancellation |
 
 ### PRD Phase 2 items already shipped
 
@@ -552,14 +553,25 @@ server handles reasoning.
 
 **Depends on:** Phase E (registry in production)
 
-### 3F: Semi-Autonomic Process Layer
+### 3F: Semi-Autonomic Process Layer -- COMPLETE
 
 > PRD 4.1: Background research, scheduled tasks. Automatic but overridable.
 
-- [ ] Background task queue (beyond FastAPI's BackgroundTasks)
-- [ ] Scheduled task support
-- [ ] User can query: "What are you working on?"
-- [ ] User can cancel or redirect
+- [x] TaskManager: tracks active background tasks with asyncio.Task handles
+- [x] Task lifecycle: QUEUED -> RUNNING -> COMPLETED/FAILED/CANCELLED
+- [x] User can query: "What are you working on?" (GET /tasks/active)
+- [x] User can cancel running tasks (POST /task/{id}/cancel)
+- [x] Progress tracking during execution (current iteration, phase)
+- [x] Scheduled task support (via existing Heartbeat system)
+
+**API endpoints:**
+- `GET /tasks/active` - List running/queued tasks
+- `GET /tasks/recent` - List recent tasks (monitoring)
+- `POST /task/{id}/cancel` - Cancel a running task
+- `GET /tasks/stats` - Task counts
+
+**Files created:** `manager/task_manager.py`, `tests/test_task_manager.py` (22 tests)
+**Files modified:** `api/routes.py`, `manager/__init__.py`
 
 **Depends on:** 3E, 2H (checkpoints for status visibility)
 
@@ -732,7 +744,7 @@ Phase 3 (Autonomy)
   |  3C: Meta-Learning ................. DONE
   |  3D: Trust Escalation .............. DONE
   |  3E: Autonomic Layer ............... DONE
-  |  3F: Semi-Autonomic Layer .......... unblocked (3E done)
+  |  3F: Semi-Autonomic Layer .......... DONE
   |  3G: Compaction .................... independent
   |  3H: Error Learning ................ independent
   |  3I: Notifications ................. independent
@@ -772,10 +784,13 @@ Phase 6 (Future)
 15. ~~**3C** -- Meta-Learning~~ DONE
 16. ~~**3D** -- Trust Escalation~~ DONE
 17. ~~**3E** -- Autonomic Process Layer~~ DONE
+18. ~~**3F** -- Semi-Autonomic Process Layer~~ DONE
 
 **Next:**
 - Run migrations in Supabase (`002_identity_heartbeats.sql`, `003_webhook_url.sql`, `004_saved_arrangements.sql`)
 - Manually create first app in Supabase `apps` table
 - Set `AUTONOMIC_ENABLED=true` in production to enable background health monitoring
-- Phase 3F (Semi-Autonomic Process Layer)
-- Phase 3G-3I (independent: Compaction, Error Learning, Notifications)
+- Phase 3G (Compaction Strategies) - independent
+- Phase 3H (Error Learning) - independent
+- Phase 3I (Notification Layer) - independent
+- Phase 4 (Local Room) - can start after Phase 2

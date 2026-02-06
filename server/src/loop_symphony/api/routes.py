@@ -45,6 +45,7 @@ from loop_symphony.models.task import (
 )
 from loop_symphony.models.trust import TrustLevelUpdate, TrustMetrics, TrustSuggestion
 from loop_symphony.models.health import SystemHealth
+from loop_symphony.manager.task_manager import TaskManager, TaskState
 from loop_symphony.manager.trust_tracker import TrustTracker
 from loop_symphony.tools.claude import ClaudeClient
 from loop_symphony.tools.registry import ToolRegistry
@@ -61,6 +62,7 @@ _db_client: DatabaseClient | None = None
 _event_bus: EventBus | None = None
 _heartbeat_worker: HeartbeatWorker | None = None
 _trust_tracker: TrustTracker | None = None
+_task_manager: TaskManager | None = None
 
 
 def _build_registry() -> ToolRegistry:
@@ -115,6 +117,14 @@ def get_trust_tracker() -> TrustTracker:
     return _trust_tracker
 
 
+def get_task_manager() -> TaskManager:
+    """Get or create task manager instance."""
+    global _task_manager
+    if _task_manager is None:
+        _task_manager = TaskManager()
+    return _task_manager
+
+
 async def execute_task_background(
     request: TaskRequest,
     conductor: Conductor,
@@ -129,14 +139,15 @@ async def execute_task_background(
         db: The database client
         event_bus: The event bus for SSE streaming
     """
+    task_manager = get_task_manager()
+    task_id = request.id
+
     try:
         # Update status to running
         await db.update_task_status(request.id, TaskStatus.RUNNING)
         event_bus.emit(request.id, {"event": EVENT_STARTED})
 
         # Create checkpoint callback bound to this task
-        task_id = request.id
-
         async def _checkpoint(
             iteration_num: int,
             phase: str,
@@ -146,6 +157,10 @@ async def execute_task_background(
         ) -> None:
             await db.record_iteration(
                 task_id, iteration_num, phase, input_data, output_data, duration_ms
+            )
+            # Update task manager with progress
+            await task_manager.update_progress(
+                task_id, iteration_num, f"Phase: {phase}"
             )
             event_bus.emit(task_id, {
                 "event": EVENT_ITERATION,
@@ -164,6 +179,9 @@ async def execute_task_background(
 
         # Update database with result
         await db.complete_task(request.id, response)
+
+        # Mark as complete in task manager
+        await task_manager.complete_task(task_id)
 
         # Track trust metrics if we have app context
         context = request.context
@@ -185,8 +203,16 @@ async def execute_task_background(
             "confidence": response.confidence,
         })
 
+    except asyncio.CancelledError:
+        # Task was cancelled by user
+        logger.info(f"Task {task_id} was cancelled")
+        await task_manager.mark_cancelled(task_id)
+        await db.update_task_status(task_id, TaskStatus.FAILED, error="Cancelled by user")
+        event_bus.emit(task_id, {"event": EVENT_ERROR, "error": "Task cancelled"})
+
     except Exception as e:
         logger.error(f"Task {request.id} failed: {e}")
+        await task_manager.fail_task(task_id, str(e))
         await db.fail_task(request.id, str(e))
         event_bus.emit(request.id, {"event": EVENT_ERROR, "error": str(e)})
 
@@ -342,13 +368,25 @@ async def submit_task(
     # Trust level 1 or 2: Execute immediately
     await db.create_task(request)
 
-    # Schedule background execution
-    background_tasks.add_task(
-        execute_task_background,
-        request,
-        conductor,
-        db,
-        event_bus,
+    # Register with task manager for tracking
+    task_manager = get_task_manager()
+    context = request.context
+    await task_manager.register_task(
+        task_id=request.id,
+        query=request.query,
+        instrument=instrument_name,
+        app_id=context.app_id if context else None,
+        user_id=context.user_id if context else None,
+    )
+
+    # Create asyncio task for cancellation support
+    asyncio_task = asyncio.create_task(
+        execute_task_background(request, conductor, db, event_bus)
+    )
+    await task_manager.start_task(
+        request.id,
+        asyncio_task,
+        max_iterations=_INSTRUMENT_ITERATIONS.get(instrument_name, 5),
     )
 
     return TaskSubmitResponse(
@@ -361,7 +399,6 @@ async def submit_task(
 @router.post("/task/{task_id}/approve", response_model=TaskSubmitResponse)
 async def approve_task(
     task_id: str,
-    background_tasks: BackgroundTasks,
     conductor: Annotated[Conductor, Depends(get_conductor)],
     db: Annotated[DatabaseClient, Depends(get_db_client)],
     event_bus: Annotated[EventBus, Depends(get_event_bus)],
@@ -370,7 +407,6 @@ async def approve_task(
 
     Args:
         task_id: The task ID to approve
-        background_tasks: FastAPI background tasks
         conductor: The conductor instance
         db: The database client
         event_bus: The event bus for SSE streaming
@@ -398,15 +434,31 @@ async def approve_task(
     # Reconstruct the request from stored data
     request = TaskRequest(**task_data["request"])
 
-    # Update status and execute
+    # Update status
     await db.update_task_status(task_id, TaskStatus.PENDING)
 
-    background_tasks.add_task(
-        execute_task_background,
-        request,
-        conductor,
-        db,
-        event_bus,
+    # Determine instrument for tracking
+    instrument_name = await conductor.analyze_and_route(request)
+
+    # Register with task manager
+    task_manager = get_task_manager()
+    context = request.context
+    await task_manager.register_task(
+        task_id=task_id,
+        query=request.query,
+        instrument=instrument_name,
+        app_id=context.app_id if context else None,
+        user_id=context.user_id if context else None,
+    )
+
+    # Create asyncio task for cancellation support
+    asyncio_task = asyncio.create_task(
+        execute_task_background(request, conductor, db, event_bus)
+    )
+    await task_manager.start_task(
+        task_id,
+        asyncio_task,
+        max_iterations=_INSTRUMENT_ITERATIONS.get(instrument_name, 5),
     )
 
     logger.info(f"Task {task_id} approved and executing")
@@ -1297,3 +1349,133 @@ async def update_trust_level(
     return trust_tracker.update_trust_level(
         auth.app.id, update.trust_level, user_id
     )
+
+
+# -------------------------------------------------------------------------
+# Task Management Endpoints (Phase 3F: Semi-Autonomic Layer)
+# -------------------------------------------------------------------------
+
+
+@router.get("/tasks/active")
+async def get_active_tasks(
+    auth: OptionalAuth = None,
+    task_manager: Annotated[TaskManager, Depends(get_task_manager)] = None,
+) -> list[dict]:
+    """Get all currently active (running or queued) tasks.
+
+    This implements "What are you working on?" for the semi-autonomic layer.
+
+    Args:
+        auth: Optional authentication context (filters by app if provided)
+        task_manager: The task manager instance
+
+    Returns:
+        List of active task information
+    """
+    if task_manager is None:
+        task_manager = get_task_manager()
+
+    app_id = str(auth.app.id) if auth else None
+    user_id = str(auth.user.id) if auth and auth.user else None
+
+    active = task_manager.get_active_tasks(app_id=app_id, user_id=user_id)
+    return [t.to_dict() for t in active]
+
+
+@router.get("/tasks/recent")
+async def get_recent_tasks(
+    limit: int = 20,
+    auth: OptionalAuth = None,
+    task_manager: Annotated[TaskManager, Depends(get_task_manager)] = None,
+) -> list[dict]:
+    """Get recent tasks (for monitoring/debugging).
+
+    Args:
+        limit: Maximum number of tasks to return (default 20)
+        auth: Optional authentication context
+        task_manager: The task manager instance
+
+    Returns:
+        List of recent task information
+    """
+    if task_manager is None:
+        task_manager = get_task_manager()
+
+    app_id = str(auth.app.id) if auth else None
+    tasks = task_manager.get_all_tasks(limit=limit, app_id=app_id)
+    return [t.to_dict() for t in tasks]
+
+
+@router.post("/task/{task_id}/cancel")
+async def cancel_task(
+    task_id: str,
+    task_manager: Annotated[TaskManager, Depends(get_task_manager)],
+    db: Annotated[DatabaseClient, Depends(get_db_client)],
+) -> dict:
+    """Cancel a running task.
+
+    Requests cancellation of the task. The task will be marked as cancelled
+    and its asyncio.Task will be cancelled. The actual cancellation may take
+    a moment as the task needs to reach a cancellation point.
+
+    Args:
+        task_id: The task ID to cancel
+        task_manager: The task manager instance
+        db: The database client
+
+    Returns:
+        Status of the cancellation request
+
+    Raises:
+        HTTPException: If task not found or not running
+    """
+    managed = task_manager.get_task(task_id)
+
+    if not managed:
+        # Check if it exists in the database but not in memory
+        task_data = await db.get_task(task_id)
+        if not task_data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Task {task_id} not found",
+            )
+        # Task exists but isn't running
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Task {task_id} is not currently running (status: {task_data['status']})",
+        )
+
+    if managed.state != TaskState.RUNNING:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Task {task_id} is not running (state: {managed.state.value})",
+        )
+
+    cancelled = await task_manager.cancel_task(task_id)
+
+    if not cancelled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Could not cancel task {task_id}",
+        )
+
+    return {
+        "task_id": task_id,
+        "status": "cancelling",
+        "message": "Cancellation requested. Task will be cancelled shortly.",
+    }
+
+
+@router.get("/tasks/stats")
+async def get_task_stats(
+    task_manager: Annotated[TaskManager, Depends(get_task_manager)],
+) -> dict:
+    """Get task manager statistics.
+
+    Returns:
+        Dict with active_count, total_count
+    """
+    return {
+        "active_count": task_manager.active_count,
+        "total_count": task_manager.total_count,
+    }
