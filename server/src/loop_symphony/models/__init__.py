@@ -1,5 +1,10 @@
 """Pydantic models for Loop Symphony - the contracts."""
 
+from loop_symphony.models.arrangement import (
+    ArrangementProposal,
+    ArrangementStep,
+    ArrangementValidation,
+)
 from loop_symphony.models.finding import ExecutionMetadata, Finding, Source
 from loop_symphony.models.heartbeat import (
     Heartbeat,
@@ -22,6 +27,9 @@ from loop_symphony.models.task import (
 
 __all__ = [
     "App",
+    "ArrangementProposal",
+    "ArrangementStep",
+    "ArrangementValidation",
     "AuthContext",
     "ExecutionMetadata",
     "Finding",

@@ -21,6 +21,7 @@ from loop_symphony.api.events import (
 from loop_symphony.db.client import DatabaseClient
 from loop_symphony.manager.conductor import Conductor
 from loop_symphony.manager.heartbeat_worker import HeartbeatWorker
+from loop_symphony.models.arrangement import ArrangementProposal, ArrangementValidation
 from loop_symphony.models.heartbeat import Heartbeat, HeartbeatCreate, HeartbeatUpdate
 from loop_symphony.models.outcome import TaskStatus
 from loop_symphony.models.process import ProcessType
@@ -348,6 +349,134 @@ async def approve_task(
         task_id=task_id,
         status=TaskStatus.PENDING,
         message="Task approved and executing",
+    )
+
+
+# -------------------------------------------------------------------------
+# Novel Arrangement Endpoints (Phase 3A)
+# -------------------------------------------------------------------------
+
+
+@router.post("/task/plan", response_model=ArrangementProposal)
+async def plan_arrangement(
+    request: TaskRequest,
+    conductor: Annotated[Conductor, Depends(get_conductor)],
+) -> ArrangementProposal:
+    """Plan a novel arrangement for a task without executing.
+
+    Uses Claude to analyze the query and propose the best instrument
+    composition (single, sequential, or parallel).
+
+    Args:
+        request: The task request to plan for
+        conductor: The conductor instance
+
+    Returns:
+        ArrangementProposal with recommended composition
+    """
+    logger.info(f"Planning arrangement for: {request.query[:50]}...")
+    proposal = await conductor.plan_arrangement(request.query)
+    return proposal
+
+
+@router.post("/task/plan/validate", response_model=ArrangementValidation)
+async def validate_arrangement(
+    proposal: ArrangementProposal,
+    conductor: Annotated[Conductor, Depends(get_conductor)],
+) -> ArrangementValidation:
+    """Validate an arrangement proposal.
+
+    Checks that all instruments in the proposal exist and are available.
+
+    Args:
+        proposal: The arrangement proposal to validate
+        conductor: The conductor instance
+
+    Returns:
+        ArrangementValidation with errors and warnings
+    """
+    validation = conductor.validate_arrangement(proposal)
+    return validation
+
+
+@router.post("/task/novel", response_model=TaskSubmitResponse)
+async def submit_novel_task(
+    request: TaskRequest,
+    background_tasks: BackgroundTasks,
+    conductor: Annotated[Conductor, Depends(get_conductor)],
+    db: Annotated[DatabaseClient, Depends(get_db_client)],
+    event_bus: Annotated[EventBus, Depends(get_event_bus)],
+    auth: OptionalAuth = None,
+) -> TaskSubmitResponse:
+    """Submit a task using novel arrangement generation.
+
+    Claude analyzes the query and proposes the best instrument composition,
+    then executes it. This is "Level 4 creativity" from the PRD.
+
+    Args:
+        request: The task request
+        background_tasks: FastAPI background tasks
+        conductor: The conductor instance
+        db: The database client
+        event_bus: The event bus for SSE streaming
+        auth: Optional authentication context
+
+    Returns:
+        TaskSubmitResponse with task_id
+    """
+    # Inject auth context if provided
+    if auth:
+        context = request.context or TaskContext()
+        context = context.model_copy(update={
+            "user_id": str(auth.user.id) if auth.user else None,
+        })
+        request = request.model_copy(update={"context": context})
+        logger.info(
+            f"Received novel task: {request.id} - {request.query[:50]}... "
+            f"(app={auth.app.name})"
+        )
+    else:
+        logger.info(f"Received novel task: {request.id} - {request.query[:50]}...")
+
+    # Create task record
+    await db.create_task(request)
+
+    # Schedule novel arrangement execution
+    async def execute_novel_background():
+        try:
+            await db.update_task_status(request.id, TaskStatus.RUNNING)
+            event_bus.emit(request.id, EVENT_STARTED, {"task_id": request.id})
+
+            response = await conductor.execute_novel(request)
+
+            await db.update_task_response(request.id, response)
+            await db.update_task_status(request.id, TaskStatus.COMPLETE)
+            event_bus.emit(request.id, EVENT_COMPLETE, {
+                "task_id": request.id,
+                "outcome": response.outcome.value,
+                "confidence": response.confidence,
+            })
+
+            logger.info(
+                f"Novel task {request.id} complete: "
+                f"outcome={response.outcome.value}, "
+                f"instrument={response.metadata.instrument_used}"
+            )
+        except Exception as e:
+            logger.error(f"Novel task {request.id} failed: {e}")
+            await db.update_task_status(request.id, TaskStatus.FAILED)
+            await db.update_task_error(request.id, str(e))
+            event_bus.emit(request.id, EVENT_ERROR, {
+                "task_id": request.id,
+                "error": str(e),
+            })
+
+    background_tasks.add_task(execute_novel_background)
+
+    return TaskSubmitResponse(
+        task_id=request.id,
+        status=TaskStatus.PENDING,
+        message="Novel arrangement task submitted",
     )
 
 

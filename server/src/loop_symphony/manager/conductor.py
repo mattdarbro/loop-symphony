@@ -1,8 +1,11 @@
 """Conductor - task analysis and instrument routing."""
 
+from __future__ import annotations
+
 import logging
 import re
 import time
+from typing import TYPE_CHECKING
 
 from loop_symphony.exceptions import DepthExceededError
 from loop_symphony.instruments.base import BaseInstrument, InstrumentResult
@@ -10,10 +13,14 @@ from loop_symphony.instruments.note import NoteInstrument
 from loop_symphony.instruments.research import ResearchInstrument
 from loop_symphony.instruments.synthesis import SynthesisInstrument
 from loop_symphony.instruments.vision import VisionInstrument
+from loop_symphony.models.arrangement import ArrangementProposal, ArrangementValidation
 from loop_symphony.models.finding import ExecutionMetadata
 from loop_symphony.models.process import ProcessType
 from loop_symphony.models.task import TaskContext, TaskRequest, TaskResponse
 from loop_symphony.tools.registry import ToolRegistry
+
+if TYPE_CHECKING:
+    from loop_symphony.manager.arrangement_planner import ArrangementPlanner
 
 logger = logging.getLogger(__name__)
 
@@ -81,10 +88,12 @@ class Conductor:
     """The conductor orchestrates task execution.
 
     Analyzes incoming tasks and routes them to the appropriate instrument.
+    Supports novel arrangement generation (Phase 3A).
     """
 
     def __init__(self, *, registry: ToolRegistry | None = None) -> None:
         self.registry = registry
+        self._planner: ArrangementPlanner | None = None
         if registry is not None:
             self.instruments: dict[str, BaseInstrument] = {
                 "note": self._build_instrument("note"),
@@ -99,6 +108,21 @@ class Conductor:
                 "synthesis": SynthesisInstrument(),
                 "vision": VisionInstrument(),
             }
+
+    def _get_planner(self) -> ArrangementPlanner:
+        """Lazy initialization of arrangement planner."""
+        if self._planner is None:
+            from loop_symphony.manager.arrangement_planner import ArrangementPlanner
+            from loop_symphony.tools.claude import ClaudeClient
+
+            # Get Claude from registry or create new instance
+            if self.registry is not None:
+                claude = self.registry.get_by_capability("reasoning")
+            else:
+                claude = ClaudeClient()
+
+            self._planner = ArrangementPlanner(claude=claude, registry=self.registry)
+        return self._planner
 
     def _build_instrument(self, name: str) -> BaseInstrument:
         """Build an instrument with tools resolved from the registry."""
@@ -347,3 +371,148 @@ class Conductor:
             discrepancy=result.discrepancy,
             suggested_followups=result.suggested_followups,
         )
+
+    # -------------------------------------------------------------------------
+    # Novel Arrangement Methods (Phase 3A)
+    # -------------------------------------------------------------------------
+
+    async def plan_arrangement(self, query: str) -> ArrangementProposal:
+        """Use Claude to plan a novel arrangement for a query.
+
+        Args:
+            query: The user's task query
+
+        Returns:
+            ArrangementProposal with recommended composition
+        """
+        planner = self._get_planner()
+        return await planner.plan(query)
+
+    def validate_arrangement(
+        self, proposal: ArrangementProposal
+    ) -> ArrangementValidation:
+        """Validate an arrangement proposal.
+
+        Args:
+            proposal: The arrangement proposal to validate
+
+        Returns:
+            ArrangementValidation with errors and warnings
+        """
+        planner = self._get_planner()
+        return planner.validate(proposal)
+
+    async def execute_arrangement(
+        self,
+        proposal: ArrangementProposal,
+        request: TaskRequest,
+    ) -> TaskResponse:
+        """Execute a validated arrangement proposal.
+
+        Args:
+            proposal: The validated arrangement proposal
+            request: The task request
+
+        Returns:
+            TaskResponse with results
+
+        Raises:
+            ValueError: If proposal is invalid
+        """
+        from loop_symphony.manager.composition import (
+            ParallelComposition,
+            SequentialComposition,
+        )
+
+        validation = self.validate_arrangement(proposal)
+        if not validation.valid:
+            raise ValueError(f"Invalid arrangement: {validation.errors}")
+
+        start_time = time.time()
+
+        if proposal.type == "single":
+            # Direct instrument execution
+            instrument = self.instruments[proposal.instrument]
+            result = await instrument.execute(request.query, request.context)
+            instrument_name = proposal.instrument
+
+        elif proposal.type == "sequential":
+            # Build sequential composition from steps
+            steps = [
+                (step.instrument, step.config) for step in proposal.steps
+            ]
+            composition = SequentialComposition(steps)
+            result = await composition.execute(
+                request.query, request.context, self
+            )
+            instrument_name = composition.name
+
+        elif proposal.type == "parallel":
+            # Build parallel composition
+            composition = ParallelComposition(
+                branches=proposal.branches,
+                merge_instrument=proposal.merge_instrument,
+                timeout_seconds=proposal.timeout_seconds,
+            )
+            result = await composition.execute(
+                request.query, request.context, self
+            )
+            instrument_name = composition.name
+
+        else:
+            raise ValueError(f"Unknown arrangement type: {proposal.type}")
+
+        duration_ms = int((time.time() - start_time) * 1000)
+
+        return TaskResponse(
+            request_id=request.id,
+            outcome=result.outcome,
+            findings=result.findings,
+            summary=result.summary,
+            confidence=result.confidence,
+            metadata=ExecutionMetadata(
+                instrument_used=f"novel:{instrument_name}",
+                iterations=result.iterations,
+                duration_ms=duration_ms,
+                sources_consulted=result.sources_consulted,
+                process_type=ProcessType.CONSCIOUS,
+            ),
+            discrepancy=result.discrepancy,
+            suggested_followups=result.suggested_followups,
+        )
+
+    async def execute_novel(self, request: TaskRequest) -> TaskResponse:
+        """Plan and execute a novel arrangement for a task.
+
+        This is the high-level entry point for novel arrangement execution.
+        It plans an arrangement, validates it, and executes it.
+
+        Args:
+            request: The task request
+
+        Returns:
+            TaskResponse with results
+        """
+        logger.info(f"Planning novel arrangement for task {request.id}")
+
+        # Plan the arrangement
+        proposal = await self.plan_arrangement(request.query)
+
+        # Validate
+        validation = self.validate_arrangement(proposal)
+        if not validation.valid:
+            logger.error(f"Invalid arrangement proposal: {validation.errors}")
+            # Fall back to standard execution
+            return await self.execute(request)
+
+        if validation.warnings:
+            for warning in validation.warnings:
+                logger.warning(f"Arrangement warning: {warning}")
+
+        logger.info(
+            f"Executing novel arrangement: type={proposal.type}, "
+            f"rationale={proposal.rationale[:50]}..."
+        )
+
+        # Execute the arrangement
+        return await self.execute_arrangement(proposal, request)
