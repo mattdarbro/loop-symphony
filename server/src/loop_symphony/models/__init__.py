@@ -13,6 +13,7 @@ from loop_symphony.models.outcome import Outcome
 from loop_symphony.models.task import (
     TaskContext,
     TaskPendingResponse,
+    TaskPlan,
     TaskPreferences,
     TaskRequest,
     TaskResponse,
@@ -33,6 +34,7 @@ __all__ = [
     "Source",
     "TaskContext",
     "TaskPendingResponse",
+    "TaskPlan",
     "TaskPreferences",
     "TaskRequest",
     "TaskResponse",

@@ -23,9 +23,11 @@ from loop_symphony.manager.conductor import Conductor
 from loop_symphony.manager.heartbeat_worker import HeartbeatWorker
 from loop_symphony.models.heartbeat import Heartbeat, HeartbeatCreate, HeartbeatUpdate
 from loop_symphony.models.outcome import TaskStatus
+from loop_symphony.models.process import ProcessType
 from loop_symphony.models.task import (
     TaskContext,
     TaskPendingResponse,
+    TaskPlan,
     TaskRequest,
     TaskResponse,
     TaskSubmitResponse,
@@ -165,6 +167,22 @@ async def health() -> dict:
     return response
 
 
+# Instrument descriptions for plans
+_INSTRUMENT_DESCRIPTIONS = {
+    "note": "Quick, single-pass reasoning for simple questions",
+    "research": "Multi-iteration research with web search and analysis",
+    "synthesis": "Combines multiple inputs into coherent output",
+    "vision": "Analyzes images and extracts information",
+}
+
+_INSTRUMENT_ITERATIONS = {
+    "note": 1,
+    "research": 5,
+    "synthesis": 2,
+    "vision": 3,
+}
+
+
 @router.post("/task", response_model=TaskSubmitResponse)
 async def submit_task(
     request: TaskRequest,
@@ -179,6 +197,11 @@ async def submit_task(
     The task is stored in the database and executed asynchronously.
     Returns immediately with a task_id for polling.
 
+    Trust levels:
+    - Level 0 (supervised): Returns a plan for approval before executing
+    - Level 1 (semi): Executes immediately, returns results
+    - Level 2 (auto): Executes immediately, minimal output
+
     Optionally accepts X-Api-Key and X-User-Id headers for authentication.
     When provided, the app_id and user_id are injected into the task context.
 
@@ -191,7 +214,7 @@ async def submit_task(
         auth: Optional authentication context
 
     Returns:
-        TaskSubmitResponse with task_id
+        TaskSubmitResponse with task_id (and plan if trust_level=0)
     """
     # Inject auth context if provided
     if auth:
@@ -207,7 +230,49 @@ async def submit_task(
     else:
         logger.info(f"Received task: {request.id} - {request.query[:50]}...")
 
-    # Store task in database
+    # Get trust level (default to 0 = supervised)
+    trust_level = 0
+    if request.preferences:
+        trust_level = request.preferences.trust_level
+
+    # Analyze which instrument would be used
+    instrument_name = await conductor.analyze_and_route(request)
+    process_type = ProcessType.SEMI_AUTONOMIC
+    from loop_symphony.manager.conductor import _INSTRUMENT_PROCESS_TYPE
+    if instrument_name in _INSTRUMENT_PROCESS_TYPE:
+        process_type = _INSTRUMENT_PROCESS_TYPE[instrument_name]
+
+    # Trust level 0: Return plan for approval, don't execute yet
+    if trust_level == 0:
+        await db.create_task(request)
+        await db.update_task_status(request.id, TaskStatus.AWAITING_APPROVAL)
+
+        plan = TaskPlan(
+            task_id=request.id,
+            query=request.query,
+            instrument=instrument_name,
+            process_type=process_type.value,
+            estimated_iterations=_INSTRUMENT_ITERATIONS.get(instrument_name, 1),
+            description=_INSTRUMENT_DESCRIPTIONS.get(
+                instrument_name,
+                f"Process query using {instrument_name} instrument"
+            ),
+            requires_approval=True,
+        )
+
+        logger.info(
+            f"Task {request.id} awaiting approval (trust_level=0, "
+            f"instrument={instrument_name})"
+        )
+
+        return TaskSubmitResponse(
+            task_id=request.id,
+            status=TaskStatus.AWAITING_APPROVAL,
+            message="Task plan ready for approval. Call POST /task/{id}/approve to execute.",
+            plan=plan,
+        )
+
+    # Trust level 1 or 2: Execute immediately
     await db.create_task(request)
 
     # Schedule background execution
@@ -223,6 +288,66 @@ async def submit_task(
         task_id=request.id,
         status=TaskStatus.PENDING,
         message="Task submitted successfully",
+    )
+
+
+@router.post("/task/{task_id}/approve", response_model=TaskSubmitResponse)
+async def approve_task(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    conductor: Annotated[Conductor, Depends(get_conductor)],
+    db: Annotated[DatabaseClient, Depends(get_db_client)],
+    event_bus: Annotated[EventBus, Depends(get_event_bus)],
+) -> TaskSubmitResponse:
+    """Approve and execute a task that was submitted with trust_level=0.
+
+    Args:
+        task_id: The task ID to approve
+        background_tasks: FastAPI background tasks
+        conductor: The conductor instance
+        db: The database client
+        event_bus: The event bus for SSE streaming
+
+    Returns:
+        TaskSubmitResponse indicating execution has started
+
+    Raises:
+        HTTPException: If task not found or not awaiting approval
+    """
+    task_data = await db.get_task(task_id)
+
+    if not task_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task {task_id} not found",
+        )
+
+    if task_data["status"] != TaskStatus.AWAITING_APPROVAL.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Task {task_id} is not awaiting approval (status: {task_data['status']})",
+        )
+
+    # Reconstruct the request from stored data
+    request = TaskRequest(**task_data["request"])
+
+    # Update status and execute
+    await db.update_task_status(task_id, TaskStatus.PENDING)
+
+    background_tasks.add_task(
+        execute_task_background,
+        request,
+        conductor,
+        db,
+        event_bus,
+    )
+
+    logger.info(f"Task {task_id} approved and executing")
+
+    return TaskSubmitResponse(
+        task_id=task_id,
+        status=TaskStatus.PENDING,
+        message="Task approved and executing",
     )
 
 

@@ -22,6 +22,7 @@ class TaskStatus(str, Enum):
     """Task execution status."""
 
     PENDING = "pending"
+    AWAITING_APPROVAL = "awaiting_approval"  # Trust level 0: plan returned, waiting for approval
     RUNNING = "running"
     COMPLETE = "complete"
     FAILED = "failed"

@@ -43,12 +43,25 @@ class TaskRequest(BaseModel):
     preferences: TaskPreferences | None = None
 
 
+class TaskPlan(BaseModel):
+    """Execution plan for a task (returned when trust_level=0)."""
+
+    task_id: str
+    query: str
+    instrument: str
+    process_type: str
+    estimated_iterations: int
+    description: str
+    requires_approval: bool = True
+
+
 class TaskSubmitResponse(BaseModel):
     """Immediate response after submitting a task."""
 
     task_id: str
     status: TaskStatus = TaskStatus.PENDING
     message: str = "Task submitted successfully"
+    plan: TaskPlan | None = None  # Included when trust_level=0
 
 
 class TaskPendingResponse(BaseModel):
