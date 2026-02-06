@@ -28,6 +28,7 @@ class Heartbeat(BaseModel):
     timezone: str = "UTC"
     is_active: bool = True
     context_template: dict = Field(default_factory=dict)
+    webhook_url: str | None = None  # URL to POST results to on completion
     created_at: datetime
     updated_at: datetime
 
@@ -40,6 +41,7 @@ class HeartbeatCreate(BaseModel):
     cron_expression: str
     timezone: str = "UTC"
     context_template: dict = Field(default_factory=dict)
+    webhook_url: str | None = None  # URL to POST results to on completion
 
 
 class HeartbeatUpdate(BaseModel):
@@ -51,6 +53,7 @@ class HeartbeatUpdate(BaseModel):
     timezone: str | None = None
     is_active: bool | None = None
     context_template: dict | None = None
+    webhook_url: str | None = None  # URL to POST results to on completion
 
 
 class HeartbeatRun(BaseModel):

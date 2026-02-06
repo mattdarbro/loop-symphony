@@ -4,12 +4,13 @@ import logging
 from datetime import datetime, UTC, timedelta
 from typing import Any
 
+import httpx
 from croniter import croniter
 
 from loop_symphony.db.client import DatabaseClient
 from loop_symphony.manager.conductor import Conductor
 from loop_symphony.models.heartbeat import Heartbeat, HeartbeatStatus
-from loop_symphony.models.task import TaskContext, TaskRequest
+from loop_symphony.models.task import TaskContext, TaskRequest, TaskResponse
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,64 @@ class HeartbeatWorker:
             weekday=now.strftime("%A"),
             heartbeat_name=heartbeat.name,
         )
+
+    async def _call_webhook(
+        self,
+        heartbeat: Heartbeat,
+        response: TaskResponse,
+        run_id: str,
+    ) -> bool:
+        """Call the webhook URL with the task result.
+
+        Args:
+            heartbeat: The heartbeat that triggered this
+            response: The task response
+            run_id: The heartbeat run ID
+
+        Returns:
+            True if webhook succeeded, False otherwise
+        """
+        if not heartbeat.webhook_url:
+            return True  # No webhook configured, that's fine
+
+        payload = {
+            "event": "heartbeat.completed",
+            "heartbeat_id": str(heartbeat.id),
+            "heartbeat_name": heartbeat.name,
+            "run_id": run_id,
+            "task_id": response.request_id,
+            "outcome": response.outcome.value,
+            "confidence": response.confidence,
+            "summary": response.summary,
+            "findings": [f.model_dump() for f in response.findings],
+            "suggested_followups": response.suggested_followups,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    heartbeat.webhook_url,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                )
+                resp.raise_for_status()
+                logger.info(
+                    f"Webhook called successfully for heartbeat {heartbeat.name}: "
+                    f"status={resp.status_code}"
+                )
+                return True
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                f"Webhook returned error for heartbeat {heartbeat.name}: "
+                f"status={e.response.status_code}"
+            )
+            return False
+        except Exception as e:
+            logger.error(
+                f"Webhook failed for heartbeat {heartbeat.name}: {e}"
+            )
+            return False
 
     async def get_last_run_at(self, heartbeat_id) -> datetime | None:
         """Get when a heartbeat last ran successfully.
@@ -150,6 +209,9 @@ class HeartbeatWorker:
                 f"outcome={response.outcome.value}, confidence={response.confidence}"
             )
 
+            # Call webhook if configured
+            webhook_success = await self._call_webhook(heartbeat, response, run_id)
+
             return {
                 "heartbeat_id": str(heartbeat.id),
                 "heartbeat_name": heartbeat.name,
@@ -158,6 +220,8 @@ class HeartbeatWorker:
                 "status": "completed",
                 "outcome": response.outcome.value,
                 "summary": response.summary,
+                "webhook_called": heartbeat.webhook_url is not None,
+                "webhook_success": webhook_success,
             }
 
         except Exception as e:
