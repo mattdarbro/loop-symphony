@@ -44,6 +44,7 @@ from loop_symphony.models.task import (
     TaskSubmitResponse,
 )
 from loop_symphony.models.trust import TrustLevelUpdate, TrustMetrics, TrustSuggestion
+from loop_symphony.models.health import SystemHealth
 from loop_symphony.manager.trust_tracker import TrustTracker
 from loop_symphony.tools.claude import ClaudeClient
 from loop_symphony.tools.registry import ToolRegistry
@@ -200,6 +201,36 @@ async def health() -> dict:
     if _registry is not None:
         response["tools"] = sorted(tool.name for tool in _registry.get_all())
     return response
+
+
+@router.get("/health/system", response_model=SystemHealth)
+async def system_health() -> SystemHealth:
+    """Get detailed system health status.
+
+    Returns comprehensive health information from the autonomic layer:
+    - Overall status (healthy, degraded, critical)
+    - Component health (database, tools)
+    - Uptime and statistics
+    - Error tracking
+
+    This endpoint is used by external monitoring systems.
+    """
+    from loop_symphony.main import get_system_health
+    return get_system_health()
+
+
+@router.get("/health/database")
+async def database_health(
+    db: Annotated[DatabaseClient, Depends(get_db_client)],
+) -> dict:
+    """Check database connectivity.
+
+    Performs a simple query to verify the database is reachable.
+
+    Returns:
+        Dict with healthy status, latency, and any error
+    """
+    return await db.health_check()
 
 
 # Instrument descriptions for plans

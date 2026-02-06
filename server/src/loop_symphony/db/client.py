@@ -582,3 +582,42 @@ class DatabaseClient:
             "stats": stats,
             "updated_at": datetime.now(UTC).isoformat(),
         }).eq("id", str(arrangement_id)).execute()
+
+    # -------------------------------------------------------------------------
+    # Health Check
+    # -------------------------------------------------------------------------
+
+    async def health_check(self) -> dict[str, Any]:
+        """Check database connectivity and return health status.
+
+        Performs a simple query to verify the database is reachable.
+
+        Returns:
+            Dict with:
+                - healthy: bool - whether the database is reachable
+                - latency_ms: float - query latency in milliseconds
+                - error: str | None - error message if unhealthy
+        """
+        import time
+
+        start = time.perf_counter()
+        try:
+            # Simple query to verify connectivity
+            # Using a lightweight query that should always work
+            result = self.client.table("tasks").select("id").limit(1).execute()
+            latency_ms = (time.perf_counter() - start) * 1000
+
+            return {
+                "healthy": True,
+                "latency_ms": round(latency_ms, 2),
+                "error": None,
+            }
+        except Exception as e:
+            latency_ms = (time.perf_counter() - start) * 1000
+            logger.error(f"Database health check failed: {e}")
+
+            return {
+                "healthy": False,
+                "latency_ms": round(latency_ms, 2),
+                "error": str(e),
+            }

@@ -8,7 +8,7 @@
 
 ## Current State
 
-**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE. Platform Identity: COMPLETE. Phase 3A-3D: COMPLETE.** 461 tests passing.
+**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE. Platform Identity: COMPLETE. Phase 3A-3E: COMPLETE.** 484 tests passing.
 
 | Component | Status | Notes |
 |-----------|--------|-------|
@@ -44,6 +44,7 @@
 | Loop proposals | Done | 3B — LoopProposer, LoopExecutor, phase-based loops |
 | Meta-learning | Done | 3C — ArrangementTracker, suggest saving high-performers |
 | Trust escalation | Done | 3D — TrustTracker, approval workflow, escalation suggestions |
+| Autonomic layer | Done | 3E — Background scheduler, health monitoring, pain response |
 
 ### PRD Phase 2 items already shipped
 
@@ -529,16 +530,25 @@ server handles reasoning.
 
 **Depends on:** 2G (process types)
 
-### 3E: Autonomic Process Layer
+### 3E: Autonomic Process Layer -- COMPLETE
 
 > PRD 4.1: Heartbeat, compaction, token refresh. Invisible to user.
-> Note: `registry.health_check_all()` is already built. This phase
-> adds the scheduler that calls it.
 
-- [ ] Background scheduler using FastAPI lifespan events (already in `main.py`)
-- [ ] Periodic `health_check_all()` via registry
-- [ ] Supabase connection monitoring
-- [ ] Only surfaces on critical error ("pain response")
+- [x] Background scheduler using FastAPI lifespan events
+- [x] Periodic `health_check_all()` via registry (configurable interval)
+- [x] Database/Supabase connection monitoring (health_check method)
+- [x] Only surfaces on critical error ("pain response")
+- [x] SystemHealth model tracks component health, uptime, stats
+- [x] Health status: HEALTHY, DEGRADED (tools), CRITICAL (database)
+- [x] API endpoints: `GET /health/system`, `GET /health/database`
+
+**Config settings:**
+- `AUTONOMIC_ENABLED`: Enable/disable autonomic layer (default: false)
+- `AUTONOMIC_HEARTBEAT_INTERVAL`: Seconds between heartbeat ticks (default: 60)
+- `AUTONOMIC_HEALTH_INTERVAL`: Seconds between health checks (default: 300)
+
+**Files created:** `models/health.py`, `tests/test_autonomic.py` (23 tests)
+**Files modified:** `main.py`, `db/client.py`, `api/routes.py`, `models/__init__.py`
 
 **Depends on:** Phase E (registry in production)
 
@@ -721,8 +731,8 @@ Phase 3 (Autonomy)
   |  3B: Loop Proposals ................ DONE
   |  3C: Meta-Learning ................. DONE
   |  3D: Trust Escalation .............. DONE
-  |  3E: Autonomic Layer ............... blocked by E (health checks built)
-  |  3F: Semi-Autonomic Layer .......... blocked by 3E, 2H
+  |  3E: Autonomic Layer ............... DONE
+  |  3F: Semi-Autonomic Layer .......... unblocked (3E done)
   |  3G: Compaction .................... independent
   |  3H: Error Learning ................ independent
   |  3I: Notifications ................. independent
@@ -761,10 +771,11 @@ Phase 6 (Future)
 14. ~~**3B** -- Loop Proposal System~~ DONE
 15. ~~**3C** -- Meta-Learning~~ DONE
 16. ~~**3D** -- Trust Escalation~~ DONE
+17. ~~**3E** -- Autonomic Process Layer~~ DONE
 
 **Next:**
 - Run migrations in Supabase (`002_identity_heartbeats.sql`, `003_webhook_url.sql`, `004_saved_arrangements.sql`)
 - Manually create first app in Supabase `apps` table
-- Phase 3E (Autonomic Process Layer)
+- Set `AUTONOMIC_ENABLED=true` in production to enable background health monitoring
 - Phase 3F (Semi-Autonomic Process Layer)
 - Phase 3G-3I (independent: Compaction, Error Learning, Notifications)

@@ -26,6 +26,7 @@ from loop_symphony.models.heartbeat import (
     HeartbeatStatus,
     HeartbeatUpdate,
 )
+from loop_symphony.models.health import ComponentHealth, HealthStatus, SystemHealth
 from loop_symphony.models.identity import App, AuthContext, UserProfile
 from loop_symphony.models.outcome import Outcome
 from loop_symphony.models.trust import TrustLevelUpdate, TrustMetrics, TrustSuggestion
@@ -42,6 +43,7 @@ from loop_symphony.models.task import (
 __all__ = [
     "App",
     "ArrangementExecution",
+    "ComponentHealth",
     "ArrangementProposal",
     "ArrangementStats",
     "ArrangementStep",
@@ -55,6 +57,7 @@ __all__ = [
     "HeartbeatRun",
     "HeartbeatStatus",
     "HeartbeatUpdate",
+    "HealthStatus",
     "LoopExecutionPlan",
     "LoopPhase",
     "LoopProposal",
@@ -63,6 +66,7 @@ __all__ = [
     "SaveArrangementRequest",
     "SavedArrangement",
     "Source",
+    "SystemHealth",
     "TaskContext",
     "TaskPendingResponse",
     "TaskPlan",
