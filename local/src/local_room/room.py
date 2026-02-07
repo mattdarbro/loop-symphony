@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field
 from local_room.config import LocalRoomConfig
 from local_room.tools.ollama import OllamaClient
 from local_room.instruments.note import LocalNoteInstrument
+from local_room.router import TaskRouter, RoutingDecision, RoutingResult
+from local_room.privacy import PrivacyClassifier
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +53,8 @@ class LocalRoom:
     - Registration with Loop Symphony server
     - Heartbeat/presence
     - Local instrument execution
+    - Privacy-aware routing
+    - Offline fallback
     """
 
     def __init__(self, config: LocalRoomConfig) -> None:
@@ -66,6 +70,11 @@ class LocalRoom:
             timeout=config.ollama_timeout,
         )
         self._note = LocalNoteInstrument(self._ollama)
+        self._router = TaskRouter(
+            server_url=config.server_url,
+            local_capabilities=config.capabilities,
+        )
+        self._privacy_classifier = PrivacyClassifier()
         self._registered = False
         self._heartbeat_task: asyncio.Task | None = None
 
@@ -92,6 +101,34 @@ class LocalRoom:
         """Get the Note instrument."""
         return self._note
 
+    @property
+    def router(self) -> TaskRouter:
+        """Get the task router."""
+        return self._router
+
+    @property
+    def privacy_classifier(self) -> PrivacyClassifier:
+        """Get the privacy classifier."""
+        return self._privacy_classifier
+
+    async def route_task(
+        self,
+        query: str,
+        context: dict[str, Any] | None = None,
+        force_local: bool = False,
+    ) -> RoutingResult:
+        """Route a task to the appropriate destination.
+
+        Args:
+            query: The query to route
+            context: Optional context
+            force_local: Force local execution
+
+        Returns:
+            RoutingResult with decision
+        """
+        return await self._router.route(query, context, force_local=force_local)
+
     async def start(self) -> None:
         """Start the room (register and begin heartbeat)."""
         # Check Ollama health first
@@ -99,6 +136,9 @@ class LocalRoom:
         if not health.get("healthy"):
             logger.warning(f"Ollama not healthy: {health.get('error')}")
             # Continue anyway - might come online later
+
+        # Start router (begins server health checks)
+        await self._router.start()
 
         # Register with server
         await self._register()
@@ -116,6 +156,7 @@ class LocalRoom:
             except asyncio.CancelledError:
                 pass
 
+        await self._router.stop()
         await self._deregister()
         logger.info(f"Local Room stopped: {self._config.room_id}")
 
@@ -219,12 +260,15 @@ class LocalRoom:
         """Get overall health status."""
         ollama_health = await self._ollama.health_check()
         note_health = await self._note.health_check()
+        router_status = self._router.get_status()
 
         return {
             "healthy": ollama_health.get("healthy", False),
             "room_id": self._config.room_id,
             "registered": self._registered,
+            "server_available": router_status.get("server_available", False),
             "ollama": ollama_health,
+            "router": router_status,
             "instruments": {
                 "local_note": note_health,
             },

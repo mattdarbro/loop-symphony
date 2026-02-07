@@ -8,7 +8,7 @@
 
 ## Current State
 
-**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE. Platform Identity: COMPLETE. Phase 3: COMPLETE. Phase 4A: IN PROGRESS.** 608 server tests + 20 local tests.
+**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE. Platform Identity: COMPLETE. Phase 3: COMPLETE. Phase 4A: COMPLETE. Phase 4B: COMPLETE.** 608 server tests + 50 local tests.
 
 | Component | Status | Notes |
 |-----------|--------|-------|
@@ -49,7 +49,8 @@
 | Compaction strategies | Done | 3G — Compactor with summarize/prune/selective/hybrid strategies |
 | Error learning | Done | 3H — ErrorTracker, pattern detection, learning suggestions |
 | Notification layer | Done | 3I — Telegram, Webhook, Push (placeholder), per-user preferences |
-| Local Room foundation | WIP | 4A — OllamaClient, LocalNoteInstrument, room registration |
+| Local Room foundation | Done | 4A — OllamaClient, LocalNoteInstrument, room registration |
+| Local Room privacy/offline | Done | 4B — PrivacyClassifier, TaskRouter, offline fallback |
 
 ### PRD Phase 2 items already shipped
 
@@ -652,12 +653,12 @@ server handles reasoning.
 > A local LLM (Ollama) would implement the Tool protocol with capabilities
 > like {"reasoning"} and register in a local ToolRegistry.
 
-### 4A: Local Room Foundation -- IN PROGRESS
+### 4A: Local Room Foundation -- COMPLETE
 
 - [x] Local LLM integration (OllamaClient implementing Tool protocol)
 - [x] Room registration protocol with Server (LocalRoom, heartbeat)
 - [x] Basic Note instrument (LocalNoteInstrument via Ollama)
-- [ ] File access tools (implement Tool protocol)
+- [ ] File access tools (implement Tool protocol) -- deferred
 - [x] Local Room API (FastAPI service on port 8001)
 - [x] Configuration via environment variables
 
@@ -669,12 +670,25 @@ server handles reasoning.
 - `src/local_room/api/routes.py` - FastAPI endpoints
 - `tests/test_local_room.py` - 20 tests
 
-### 4B: Offline & Privacy
+### 4B: Offline & Privacy -- COMPLETE
 
-- [ ] Offline fallback when server unreachable
-- [ ] Privacy-sensitive task routing (stays local)
-- [ ] Escalation to Server for complex tasks
-- [ ] Heartbeat and state synchronization
+- [x] Offline fallback when server unreachable (ServerStatus, health check loop)
+- [x] Privacy-sensitive task routing (PrivacyClassifier with 7 categories)
+- [x] Escalation to Server for complex tasks (EscalationReason enum)
+- [x] Heartbeat and state synchronization (integrated with room lifecycle)
+
+**Privacy categories:** HEALTH, FINANCIAL, PERSONAL, LOCATION, IDENTITY, WORK, LEGAL
+**Privacy levels:** PUBLIC, SENSITIVE, PRIVATE, CONFIDENTIAL
+**Routing decisions:** LOCAL, SERVER, ESCALATE
+
+**Files created:**
+- `src/local_room/privacy.py` - PrivacyClassifier, PrivacyAssessment, pattern matching
+- `src/local_room/router.py` - TaskRouter, RoutingDecision, offline detection
+- `tests/test_privacy_router.py` - 30 tests
+
+**Files modified:**
+- `src/local_room/room.py` - Integrated router and privacy classifier
+- `src/local_room/api/routes.py` - Added /route, /privacy/check, /router/status, /task/smart endpoints
 
 ### 4C: Cross-Room Integration
 
