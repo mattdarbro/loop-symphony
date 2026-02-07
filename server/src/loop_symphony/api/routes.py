@@ -47,6 +47,7 @@ from loop_symphony.models.trust import TrustLevelUpdate, TrustMetrics, TrustSugg
 from loop_symphony.models.health import SystemHealth
 from loop_symphony.manager.task_manager import TaskManager, TaskState
 from loop_symphony.manager.trust_tracker import TrustTracker
+from loop_symphony.manager.room_registry import RoomRegistry, RoomRegistration, RoomHeartbeat, RoomInfo
 from loop_symphony.tools.claude import ClaudeClient
 from loop_symphony.tools.registry import ToolRegistry
 from loop_symphony.tools.tavily import TavilyClient
@@ -1478,4 +1479,130 @@ async def get_task_stats(
     return {
         "active_count": task_manager.active_count,
         "total_count": task_manager.total_count,
+    }
+
+
+# =============================================================================
+# Room Registry (Phase 4 - Multi-Room Architecture)
+# =============================================================================
+
+_room_registry: RoomRegistry | None = None
+
+
+def get_room_registry() -> RoomRegistry:
+    """Get or create the room registry singleton."""
+    global _room_registry
+    if _room_registry is None:
+        _room_registry = RoomRegistry()
+    return _room_registry
+
+
+@router.post("/rooms/register")
+async def register_room(
+    registration: RoomRegistration,
+    room_registry: Annotated[RoomRegistry, Depends(get_room_registry)],
+) -> dict:
+    """Register a room with the server.
+
+    Called by Local Room, iOS Room, etc. when they come online.
+    """
+    room = room_registry.register(registration)
+    return {
+        "status": "registered",
+        "room_id": room.room_id,
+        "room_type": room.room_type,
+    }
+
+
+@router.post("/rooms/deregister")
+async def deregister_room(
+    data: dict,
+    room_registry: Annotated[RoomRegistry, Depends(get_room_registry)],
+) -> dict:
+    """Deregister a room from the server.
+
+    Called when a room is shutting down gracefully.
+    """
+    room_id = data.get("room_id")
+    if not room_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="room_id is required",
+        )
+
+    found = room_registry.deregister(room_id)
+    return {
+        "status": "deregistered" if found else "not_found",
+        "room_id": room_id,
+    }
+
+
+@router.post("/rooms/heartbeat")
+async def room_heartbeat(
+    heartbeat: RoomHeartbeat,
+    room_registry: Annotated[RoomRegistry, Depends(get_room_registry)],
+) -> dict:
+    """Process a heartbeat from a room.
+
+    Rooms should send heartbeats periodically to indicate they're still online.
+    """
+    found = room_registry.heartbeat(heartbeat)
+
+    if not found:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Room not found: {heartbeat.room_id}. Please re-register.",
+        )
+
+    return {"status": "ok", "room_id": heartbeat.room_id}
+
+
+@router.get("/rooms")
+async def list_rooms(
+    room_registry: Annotated[RoomRegistry, Depends(get_room_registry)],
+) -> dict:
+    """List all registered rooms."""
+    rooms = room_registry.get_all_rooms()
+    return {
+        "rooms": [
+            {
+                "room_id": r.room_id,
+                "room_name": r.room_name,
+                "room_type": r.room_type,
+                "url": r.url,
+                "status": r.status,
+                "capabilities": list(r.capabilities),
+                "instruments": r.instruments,
+                "last_heartbeat": r.last_heartbeat.isoformat(),
+            }
+            for r in rooms
+        ],
+        "stats": room_registry.stats(),
+    }
+
+
+@router.get("/rooms/{room_id}")
+async def get_room(
+    room_id: str,
+    room_registry: Annotated[RoomRegistry, Depends(get_room_registry)],
+) -> dict:
+    """Get details for a specific room."""
+    room = room_registry.get_room(room_id)
+
+    if not room:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Room not found: {room_id}",
+        )
+
+    return {
+        "room_id": room.room_id,
+        "room_name": room.room_name,
+        "room_type": room.room_type,
+        "url": room.url,
+        "status": room.status,
+        "capabilities": list(room.capabilities),
+        "instruments": room.instruments,
+        "last_heartbeat": room.last_heartbeat.isoformat(),
+        "registered_at": room.registered_at.isoformat(),
     }

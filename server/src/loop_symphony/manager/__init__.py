@@ -14,6 +14,7 @@ from loop_symphony.manager.composition import ParallelComposition, SequentialCom
 from loop_symphony.manager.conductor import Conductor
 from loop_symphony.manager.error_tracker import ErrorTracker, classify_exception
 from loop_symphony.manager.loop_executor import LoopExecutor
+from loop_symphony.manager.room_registry import RoomInfo, RoomRegistry, RoomRegistration, RoomHeartbeat
 from loop_symphony.manager.loop_proposer import LoopProposer
 from loop_symphony.manager.task_manager import ManagedTask, TaskManager, TaskState
 from loop_symphony.manager.trust_tracker import TrustTracker
@@ -33,6 +34,10 @@ __all__ = [
     "LoopProposer",
     "ParallelComposition",
     "ManagedTask",
+    "RoomHeartbeat",
+    "RoomInfo",
+    "RoomRegistration",
+    "RoomRegistry",
     "select_strategy",
     "SequentialComposition",
     "TaskManager",

@@ -8,7 +8,7 @@
 
 ## Current State
 
-**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE. Platform Identity: COMPLETE. Phase 3: COMPLETE.** 608 tests passing.
+**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE. Platform Identity: COMPLETE. Phase 3: COMPLETE. Phase 4A: IN PROGRESS.** 608 server tests + 20 local tests.
 
 | Component | Status | Notes |
 |-----------|--------|-------|
@@ -49,6 +49,7 @@
 | Compaction strategies | Done | 3G — Compactor with summarize/prune/selective/hybrid strategies |
 | Error learning | Done | 3H — ErrorTracker, pattern detection, learning suggestions |
 | Notification layer | Done | 3I — Telegram, Webhook, Push (placeholder), per-user preferences |
+| Local Room foundation | WIP | 4A — OllamaClient, LocalNoteInstrument, room registration |
 
 ### PRD Phase 2 items already shipped
 
@@ -651,12 +652,22 @@ server handles reasoning.
 > A local LLM (Ollama) would implement the Tool protocol with capabilities
 > like {"reasoning"} and register in a local ToolRegistry.
 
-### 4A: Local Room Foundation
+### 4A: Local Room Foundation -- IN PROGRESS
 
-- [ ] Local LLM integration (Ollama / LM Studio) implementing Tool protocol
-- [ ] Room registration protocol with Server
-- [ ] Basic Note instrument (local execution via local registry)
+- [x] Local LLM integration (OllamaClient implementing Tool protocol)
+- [x] Room registration protocol with Server (LocalRoom, heartbeat)
+- [x] Basic Note instrument (LocalNoteInstrument via Ollama)
 - [ ] File access tools (implement Tool protocol)
+- [x] Local Room API (FastAPI service on port 8001)
+- [x] Configuration via environment variables
+
+**Files created:** `local/` directory with:
+- `src/local_room/config.py` - Configuration
+- `src/local_room/tools/ollama.py` - Ollama client (Tool protocol)
+- `src/local_room/instruments/note.py` - Local Note instrument
+- `src/local_room/room.py` - Room lifecycle and registration
+- `src/local_room/api/routes.py` - FastAPI endpoints
+- `tests/test_local_room.py` - 20 tests
 
 ### 4B: Offline & Privacy
 
