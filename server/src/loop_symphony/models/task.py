@@ -7,6 +7,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from loop_symphony.models.finding import ExecutionMetadata, Finding
+from loop_symphony.models.intent import Intent
 from loop_symphony.models.outcome import Outcome, TaskStatus
 
 
@@ -24,6 +25,10 @@ class TaskContext(BaseModel):
     depth: int = 0
     max_depth: int = 3
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    # Why is the user asking? What are they trying to accomplish?
+    goal: str | None = None  # e.g., "planning a trip", "making a purchase decision"
+    intent: Intent | None = None  # Structured intent (decision, research, action, etc.)
 
 
 class TaskPreferences(BaseModel):

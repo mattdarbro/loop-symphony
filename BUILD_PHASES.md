@@ -8,7 +8,7 @@
 
 ## Current State
 
-**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE. Platform Identity: COMPLETE. Phase 3A-3F: COMPLETE.** 506 tests passing.
+**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE. Platform Identity: COMPLETE. Phase 3: COMPLETE.** 608 tests passing.
 
 | Component | Status | Notes |
 |-----------|--------|-------|
@@ -46,6 +46,9 @@
 | Trust escalation | Done | 3D — TrustTracker, approval workflow, escalation suggestions |
 | Autonomic layer | Done | 3E — Background scheduler, health monitoring, pain response |
 | Semi-autonomic layer | Done | 3F — TaskManager, active task queries, cancellation |
+| Compaction strategies | Done | 3G — Compactor with summarize/prune/selective/hybrid strategies |
+| Error learning | Done | 3H — ErrorTracker, pattern detection, learning suggestions |
+| Notification layer | Done | 3I — Telegram, Webhook, Push (placeholder), per-user preferences |
 
 ### PRD Phase 2 items already shipped
 
@@ -575,33 +578,53 @@ server handles reasoning.
 
 **Depends on:** 3E, 2H (checkpoints for status visibility)
 
-### 3G: Compaction Strategies
+### 3G: Compaction Strategies -- COMPLETE
 
 > PRD 10.3: Context management for long-running operations.
 
-- [ ] Summarization: chunk -> summarize -> merge
-- [ ] Pruning: score findings by relevance, drop bottom N%
-- [ ] Selective: mark "must keep" vs "can compress"
-- [ ] Strategy selection based on context type
+- [x] Summarization: chunk -> summarize -> merge (uses SummarizerProtocol)
+- [x] Pruning: score findings by confidence, drop below threshold
+- [x] Selective: preserve high-confidence, summarize rest
+- [x] Hybrid: auto-select strategy based on confidence distribution
+- [x] Strategy selection based on context type (research, fact_check, quick)
+- [x] CompactedFinding with is_summary, original_count, preserved flags
+- [x] Relevance scoring for future semantic similarity extension
 
-**Independent.** Needed when compositions accumulate large findings lists.
+**Files created:** `manager/compactor.py`, `tests/test_compactor.py` (24 tests)
+**Files modified:** `manager/__init__.py`
 
-### 3H: Error Learning
+**Independent.** Used when compositions accumulate large findings lists.
+
+### 3H: Error Learning -- COMPLETE
 
 > PRD 10.2: Error pattern detection and institutional knowledge.
 
-- [ ] Error classification taxonomy
-- [ ] Error logging with learning context
-- [ ] Pattern detection across errors
-- [ ] Suggested approach adjustments based on patterns
+- [x] Error classification taxonomy (12 categories: timeout, api_failure, rate_limited, etc.)
+- [x] Error logging with learning context (query, instrument, tool, iteration, findings)
+- [x] Pattern detection across errors (automatic detection after threshold)
+- [x] Suggested approach adjustments based on patterns (LearningInsight model)
+- [x] Exception classification helper (classify_exception function)
+- [x] Statistics and monitoring (ErrorStats with recovery rate, time-based counts)
+
+**Files created:** `models/error_learning.py`, `manager/error_tracker.py`, `db/migrations/005_error_learning.sql`, `tests/test_error_learning.py` (30 tests)
+**Files modified:** `manager/__init__.py`, `models/__init__.py`
 
 **Independent.**
 
-### 3I: Notification Layer
+### 3I: Notification Layer -- COMPLETE
 
-- [ ] Telegram integration for task completion
-- [ ] Push notification support
-- [ ] Configurable per-user notification preferences
+- [x] Telegram integration (TelegramNotifier via Bot API)
+- [x] Webhook integration (WebhookNotifier for generic HTTP callbacks)
+- [x] Push notification placeholder (PushNotifier - APNs integration ready)
+- [x] Configurable per-user notification preferences
+- [x] Channel-specific configuration (chat_id, webhook_url, device_token)
+- [x] Priority levels (low, normal, high, critical)
+- [x] Notification types (task_complete, task_failed, heartbeat_result, system_alert)
+- [x] Quiet hours support
+- [x] Convenience methods (send_task_complete, send_task_failed, send_system_alert)
+
+**Files created:** `models/notification.py`, `services/notifier.py`, `services/__init__.py`, `db/migrations/006_notifications.sql`, `tests/test_notifications.py` (31 tests)
+**Files modified:** `models/__init__.py`
 
 **Independent.**
 
@@ -611,9 +634,13 @@ server handles reasoning.
 - [x] Manager can propose and execute novel arrangements (3A)
 - [x] Manager can propose and execute novel loops (3B)
 - [x] Successful arrangements can be saved for reuse (3C)
-- [ ] Background tasks run invisibly until complete (3E, 3F)
-- [ ] Autonomic processes only surface on critical errors (3E)
-- [ ] Error patterns are logged and learning suggestions made (3H)
+- [x] Background tasks run invisibly until complete (3E, 3F)
+- [x] Autonomic processes only surface on critical errors (3E)
+- [x] Context compaction manages large findings lists (3G)
+- [x] Error patterns are logged and learning suggestions made (3H)
+- [x] Notifications sent via configurable channels (3I)
+
+**PHASE 3 COMPLETE!**
 
 ---
 
@@ -745,9 +772,9 @@ Phase 3 (Autonomy)
   |  3D: Trust Escalation .............. DONE
   |  3E: Autonomic Layer ............... DONE
   |  3F: Semi-Autonomic Layer .......... DONE
-  |  3G: Compaction .................... independent
-  |  3H: Error Learning ................ independent
-  |  3I: Notifications ................. independent
+  |  3G: Compaction .................... DONE
+  |  3H: Error Learning ................ DONE
+  |  3I: Notifications ................. DONE
   |
   v
 Phase 4 (Local Room) -- can start after Phase 2
@@ -785,12 +812,15 @@ Phase 6 (Future)
 16. ~~**3D** -- Trust Escalation~~ DONE
 17. ~~**3E** -- Autonomic Process Layer~~ DONE
 18. ~~**3F** -- Semi-Autonomic Process Layer~~ DONE
+19. ~~**3G** -- Compaction Strategies~~ DONE
+20. ~~**3H** -- Error Learning~~ DONE
+21. ~~**3I** -- Notification Layer~~ DONE
+
+**Phase 3 COMPLETE!**
 
 **Next:**
-- Run migrations in Supabase (`002_identity_heartbeats.sql`, `003_webhook_url.sql`, `004_saved_arrangements.sql`)
+- Run migrations in Supabase (`002_identity_heartbeats.sql`, `003_webhook_url.sql`, `004_saved_arrangements.sql`, `005_error_learning.sql`, `006_notifications.sql`)
 - Manually create first app in Supabase `apps` table
 - Set `AUTONOMIC_ENABLED=true` in production to enable background health monitoring
-- Phase 3G (Compaction Strategies) - independent
-- Phase 3H (Error Learning) - independent
-- Phase 3I (Notification Layer) - independent
-- Phase 4 (Local Room) - can start after Phase 2
+- Configure Telegram bot token (`TELEGRAM_BOT_TOKEN`) for notifications
+- Phase 4 (Local Room) - edge computing, offline capability
