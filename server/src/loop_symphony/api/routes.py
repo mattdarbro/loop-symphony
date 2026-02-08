@@ -79,7 +79,13 @@ def get_conductor() -> Conductor:
     global _conductor, _registry
     if _conductor is None:
         _registry = _build_registry()
-        _conductor = Conductor(registry=_registry)
+        room_registry = get_room_registry()
+        # Register the server itself so it competes in room scoring
+        room_registry.register_server(
+            capabilities={"reasoning", "synthesis", "analysis", "vision", "web_search"},
+            instruments=["note", "research", "synthesis", "vision"],
+        )
+        _conductor = Conductor(registry=_registry, room_registry=room_registry)
     return _conductor
 
 
@@ -1606,3 +1612,15 @@ async def get_room(
         "last_heartbeat": room.last_heartbeat.isoformat(),
         "registered_at": room.registered_at.isoformat(),
     }
+
+
+@router.get("/rooms/status")
+async def room_degradation_status(
+    room_registry: Annotated[RoomRegistry, Depends(get_room_registry)],
+) -> dict:
+    """Get room degradation status.
+
+    Reports which rooms are online/offline/degraded and which
+    capabilities are available across the system.
+    """
+    return room_registry.get_degradation_status()

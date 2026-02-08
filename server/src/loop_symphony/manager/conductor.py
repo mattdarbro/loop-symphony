@@ -29,6 +29,9 @@ if TYPE_CHECKING:
     from loop_symphony.manager.arrangement_tracker import ArrangementTracker
     from loop_symphony.manager.loop_executor import LoopExecutor
     from loop_symphony.manager.loop_proposer import LoopProposer
+    from loop_symphony.manager.room_client import RoomClient
+    from loop_symphony.manager.room_registry import RoomInfo, RoomRegistry
+    from loop_symphony.privacy.classifier import PrivacyClassifier
 
 logger = logging.getLogger(__name__)
 
@@ -99,12 +102,20 @@ class Conductor:
     Supports novel arrangement generation (Phase 3A) and loop proposals (Phase 3B).
     """
 
-    def __init__(self, *, registry: ToolRegistry | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        registry: ToolRegistry | None = None,
+        room_registry: RoomRegistry | None = None,
+    ) -> None:
         self.registry = registry
+        self.room_registry: RoomRegistry | None = room_registry
         self._planner: ArrangementPlanner | None = None
         self._loop_proposer: LoopProposer | None = None
         self._loop_executor: LoopExecutor | None = None
         self._tracker: ArrangementTracker | None = None
+        self._room_client: RoomClient | None = None
+        self._privacy_classifier: PrivacyClassifier | None = None
         if registry is not None:
             self.instruments: dict[str, BaseInstrument] = {
                 "note": self._build_instrument("note"),
@@ -174,6 +185,83 @@ class Conductor:
     def tracker(self) -> ArrangementTracker:
         """Public access to the arrangement tracker."""
         return self._get_tracker()
+
+    def _get_room_client(self) -> RoomClient:
+        """Lazy initialization of room client."""
+        if self._room_client is None:
+            from loop_symphony.manager.room_client import RoomClient
+            self._room_client = RoomClient()
+        return self._room_client
+
+    def _get_privacy_classifier(self) -> PrivacyClassifier:
+        """Lazy initialization of privacy classifier."""
+        if self._privacy_classifier is None:
+            from loop_symphony.privacy.classifier import PrivacyClassifier
+            self._privacy_classifier = PrivacyClassifier()
+        return self._privacy_classifier
+
+    async def _select_room(
+        self,
+        request: TaskRequest,
+        instrument_name: str,
+    ) -> RoomInfo | None:
+        """Select the best room for a task.
+
+        Considers privacy constraints and required capabilities.
+
+        Args:
+            request: The task request
+            instrument_name: The instrument chosen by analyze_and_route
+
+        Returns:
+            Best matching RoomInfo, or None if no rooms available
+        """
+        classifier = self._get_privacy_classifier()
+        privacy = classifier.classify(request.query)
+
+        prefer_local = privacy.should_stay_local
+
+        # Get required capabilities from the instrument
+        instrument = self.instruments.get(instrument_name)
+        required_caps: set[str] | None = None
+        if instrument and hasattr(instrument, "required_capabilities"):
+            required_caps = set(instrument.required_capabilities)
+
+        return self.room_registry.get_best_room_for_task(
+            required_capabilities=required_caps,
+            preferred_room_type="local" if prefer_local else None,
+            prefer_local=prefer_local,
+        )
+
+    async def _delegate_to_room(
+        self,
+        room: RoomInfo,
+        request: TaskRequest,
+    ) -> TaskResponse | None:
+        """Delegate a task to a remote room.
+
+        Args:
+            room: The target room
+            request: The task request
+
+        Returns:
+            TaskResponse on success, None on failure (triggers fallback)
+        """
+        client = self._get_room_client()
+        result = await client.delegate(room, request)
+
+        if result.success and result.response:
+            logger.info(
+                f"Task {request.id} delegated to room {room.room_id} "
+                f"({result.latency_ms}ms)"
+            )
+            return result.response
+
+        logger.warning(
+            f"Room delegation failed: room={room.room_id}, error={result.error}. "
+            f"Falling back to server execution."
+        )
+        return None
 
     def _build_instrument(self, name: str) -> BaseInstrument:
         """Build an instrument with tools resolved from the registry."""
@@ -387,6 +475,29 @@ class Conductor:
 
         # Route to appropriate instrument
         instrument_name = await self.analyze_and_route(request)
+
+        # Room-aware routing (Phase 4C)
+        failover_events: list[dict] = []
+        target_room_id: str | None = None
+
+        if self.room_registry is not None:
+            target_room = await self._select_room(request, instrument_name)
+            if target_room and target_room.room_type != "server":
+                target_room_id = target_room.room_id
+                delegated = await self._delegate_to_room(target_room, request)
+                if delegated is not None:
+                    # Add room tracking to metadata
+                    if delegated.metadata:
+                        delegated.metadata.room_id = target_room.room_id
+                    return delegated
+                # Delegation failed — record failover and fall through
+                failover_events.append({
+                    "original_room_id": target_room.room_id,
+                    "fallback_room_id": "server",
+                    "reason": "delegation_failed",
+                })
+                target_room_id = None  # Cleared since we're falling back
+
         instrument = self.instruments[instrument_name]
 
         logger.info(
@@ -418,10 +529,40 @@ class Conductor:
                 process_type=_INSTRUMENT_PROCESS_TYPE.get(
                     instrument_name, ProcessType.SEMI_AUTONOMIC
                 ),
+                room_id=target_room_id or "server",
+                failover_events=failover_events,
             ),
             discrepancy=result.discrepancy,
             suggested_followups=result.suggested_followups,
         )
+
+    # -------------------------------------------------------------------------
+    # Cross-Room Composition Methods (Phase 4C)
+    # -------------------------------------------------------------------------
+
+    async def execute_cross_room(
+        self,
+        branches: list,
+        request: TaskRequest,
+        merge_instrument: str = "synthesis",
+    ) -> TaskResponse:
+        """Execute a cross-room parallel composition.
+
+        Args:
+            branches: List of RoomBranch objects
+            request: The task request
+            merge_instrument: Instrument to merge results
+
+        Returns:
+            TaskResponse with merged results
+        """
+        from loop_symphony.manager.cross_room_composition import CrossRoomComposition
+
+        composition = CrossRoomComposition(
+            branches=branches,
+            merge_instrument=merge_instrument,
+        )
+        return await self.execute_composition(composition, request)
 
     # -------------------------------------------------------------------------
     # Novel Arrangement Methods (Phase 3A)

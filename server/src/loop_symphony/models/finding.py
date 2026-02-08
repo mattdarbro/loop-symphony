@@ -32,3 +32,5 @@ class ExecutionMetadata(BaseModel):
     duration_ms: int
     sources_consulted: list[str] = Field(default_factory=list)
     process_type: ProcessType = ProcessType.AUTONOMIC
+    room_id: str | None = None
+    failover_events: list[dict] = Field(default_factory=list)

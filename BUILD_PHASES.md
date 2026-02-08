@@ -8,7 +8,7 @@
 
 ## Current State
 
-**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE. Platform Identity: COMPLETE. Phase 3: COMPLETE. Phase 4A: COMPLETE. Phase 4B: COMPLETE.** 608 server tests + 50 local tests.
+**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE. Platform Identity: COMPLETE. Phase 3: COMPLETE. Phase 4A: COMPLETE. Phase 4B: COMPLETE. Phase 4C: COMPLETE.** 706 server tests + 50 local tests.
 
 | Component | Status | Notes |
 |-----------|--------|-------|
@@ -51,6 +51,7 @@
 | Notification layer | Done | 3I — Telegram, Webhook, Push (placeholder), per-user preferences |
 | Local Room foundation | Done | 4A — OllamaClient, LocalNoteInstrument, room registration |
 | Local Room privacy/offline | Done | 4B — PrivacyClassifier, TaskRouter, offline fallback |
+| Cross-room integration | Done | 4C — Room-aware Conductor, RoomClient delegation, CrossRoomComposition, graceful degradation |
 
 ### PRD Phase 2 items already shipped
 
@@ -690,20 +691,52 @@ server handles reasoning.
 - `src/local_room/room.py` - Integrated router and privacy classifier
 - `src/local_room/api/routes.py` - Added /route, /privacy/check, /router/status, /task/smart endpoints
 
-### 4C: Cross-Room Integration
+### 4C: Cross-Room Integration -- COMPLETE
 
-- [ ] Manager routing across iOS, Server, Local
-- [ ] Parallel room execution (iOS camera + Server search)
-- [ ] Graceful degradation when rooms offline
-- [ ] Room capability discovery (mDNS or central registry)
+- [x] Manager routing across iOS, Server, Local
+- [x] Parallel room execution (iOS camera + Server search)
+- [x] Graceful degradation when rooms offline
+- [x] Room capability discovery (central registry)
+
+**Server-side privacy classification:** Ported `PrivacyClassifier` to `privacy/classifier.py` for server-side privacy-aware routing.
+
+**Room-aware Conductor:** Conductor accepts optional `room_registry` parameter (same pattern as `ToolRegistry`). After `analyze_and_route()` determines the instrument, `_select_room()` classifies privacy and queries the registry for the best room. If best room is remote, `_delegate_to_room()` delegates via `RoomClient`. On failure, falls back to server execution.
+
+**RoomClient delegation:** `manager/room_client.py` handles HTTP POST to remote rooms, normalizes their responses (flat dict → server's `TaskResponse`), and handles timeout/connection errors.
+
+**CrossRoomComposition:** `manager/cross_room_composition.py` fans out `RoomBranch` sub-tasks across rooms via `asyncio.gather()`, then merges via synthesis instrument. Same duck-typed interface as `SequentialComposition`/`ParallelComposition`.
+
+**Graceful degradation:** When delegation fails, Conductor logs a failover event and falls back to server. `ExecutionMetadata` now tracks `room_id` and `failover_events`. `GET /rooms/status` endpoint reports degradation status.
+
+**Server self-registration:** `RoomRegistry.register_server()` registers the server itself as an always-online room so it competes in scoring alongside remote rooms.
+
+**Files created:**
+- `src/loop_symphony/privacy/__init__.py`, `src/loop_symphony/privacy/classifier.py` — Server-side privacy classification
+- `src/loop_symphony/manager/room_client.py` — Remote room HTTP delegation
+- `src/loop_symphony/manager/cross_room_composition.py` — Cross-room parallel composition
+- `tests/test_privacy_classifier.py` — 20 tests
+- `tests/test_room_client.py` — 16 tests
+- `tests/test_room_routing.py` — 18 tests
+- `tests/test_cross_room_composition.py` — 14 tests
+- `tests/test_graceful_degradation.py` — 14 tests
+
+**Files modified:**
+- `src/loop_symphony/manager/conductor.py` — `room_registry` param, `_select_room`, `_delegate_to_room`, `execute_cross_room`
+- `src/loop_symphony/manager/room_registry.py` — `register_server()`, `get_degradation_status()`
+- `src/loop_symphony/models/finding.py` — `room_id`, `failover_events` on ExecutionMetadata
+- `src/loop_symphony/api/routes.py` — Wire room_registry into conductor, `GET /rooms/status`
+- `src/loop_symphony/manager/__init__.py` — Exports
+- `src/loop_symphony/models/__init__.py` — Exports
 
 ### Phase 4 Verification
 
 **Phase 4 complete when (PRD 12.4):**
-- [ ] Local room handles simple queries offline
-- [ ] Privacy-sensitive tasks stay local
-- [ ] Manager routes across all three rooms appropriately
-- [ ] System degrades gracefully when rooms go offline
+- [x] Local room handles simple queries offline
+- [x] Privacy-sensitive tasks stay local
+- [x] Manager routes across all three rooms appropriately
+- [x] System degrades gracefully when rooms go offline
+
+**PHASE 4 COMPLETE!**
 
 ---
 
@@ -802,7 +835,10 @@ Phase 3 (Autonomy)
   |  3I: Notifications ................. DONE
   |
   v
-Phase 4 (Local Room) -- can start after Phase 2
+Phase 4 (Local Room) ..................... DONE
+  |  4A: Local Room Foundation ........... DONE
+  |  4B: Offline & Privacy ............... DONE
+  |  4C: Cross-Room Integration .......... DONE
   |
   v
 Phase 5 (Knowledge Layer) -- requires Phase 3
@@ -843,9 +879,16 @@ Phase 6 (Future)
 
 **Phase 3 COMPLETE!**
 
+**Phase 4 Progress:**
+22. ~~**4A** -- Local Room Foundation~~ DONE
+23. ~~**4B** -- Offline & Privacy~~ DONE
+24. ~~**4C** -- Cross-Room Integration~~ DONE
+
+**Phase 4 COMPLETE!**
+
 **Next:**
 - Run migrations in Supabase (`002_identity_heartbeats.sql`, `003_webhook_url.sql`, `004_saved_arrangements.sql`, `005_error_learning.sql`, `006_notifications.sql`)
 - Manually create first app in Supabase `apps` table
 - Set `AUTONOMIC_ENABLED=true` in production to enable background health monitoring
 - Configure Telegram bot token (`TELEGRAM_BOT_TOKEN`) for notifications
-- Phase 4 (Local Room) - edge computing, offline capability
+- Phase 5 (Knowledge Layer) - knowledge files, sync, interventions

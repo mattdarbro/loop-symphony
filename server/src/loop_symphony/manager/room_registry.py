@@ -214,6 +214,69 @@ class RoomRegistry:
         candidates.sort(key=score, reverse=True)
         return candidates[0]
 
+    def register_server(
+        self,
+        capabilities: set[str],
+        instruments: list[str],
+    ) -> RoomInfo:
+        """Register the server room (implicit, always online).
+
+        The server room is special: it never times out and represents
+        the local execution environment. This lets the scoring logic
+        compare server vs remote rooms on equal footing.
+
+        Args:
+            capabilities: Server's capabilities
+            instruments: Server's available instruments
+
+        Returns:
+            The registered server RoomInfo
+        """
+        server_room = RoomInfo(
+            room_id="server",
+            room_name="Server Room",
+            room_type="server",
+            url="local",  # Sentinel — never used for HTTP
+            capabilities=capabilities,
+            instruments=instruments,
+            status="online",
+        )
+        self._rooms["server"] = server_room
+        logger.info(
+            f"Server room registered with capabilities: {capabilities}"
+        )
+        return server_room
+
+    def get_degradation_status(self) -> dict:
+        """Get degradation status for all rooms.
+
+        Returns:
+            Dict with online/offline/degraded room lists and capability info
+        """
+        self._check_timeouts()
+        rooms = list(self._rooms.values())
+
+        online = [r for r in rooms if r.status == "online"]
+        offline = [r for r in rooms if r.status == "offline"]
+        degraded = [r for r in rooms if r.status == "degraded"]
+
+        caps_available: set[str] = set()
+        for r in online:
+            caps_available.update(r.capabilities)
+
+        caps_degraded: set[str] = set()
+        for r in degraded:
+            caps_degraded.update(r.capabilities)
+
+        return {
+            "fully_operational": len(offline) == 0 and len(degraded) == 0,
+            "online_rooms": [r.room_id for r in online],
+            "offline_rooms": [r.room_id for r in offline],
+            "degraded_rooms": [r.room_id for r in degraded],
+            "capabilities_available": sorted(caps_available),
+            "capabilities_degraded": sorted(caps_degraded),
+        }
+
     def _check_timeouts(self) -> None:
         """Mark rooms as offline if heartbeat timed out."""
         cutoff = datetime.now(UTC) - timedelta(seconds=self._heartbeat_timeout)

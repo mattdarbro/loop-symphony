@@ -48,6 +48,12 @@ from loop_symphony.models.notification import (
     SendNotificationRequest,
 )
 from loop_symphony.models.identity import App, AuthContext, UserProfile
+from loop_symphony.privacy.classifier import (
+    PrivacyAssessment,
+    PrivacyCategory,
+    PrivacyClassifier,
+    PrivacyLevel,
+)
 from loop_symphony.models.intent import (
     Intent,
     IntentType,
@@ -107,6 +113,10 @@ __all__ = [
     "LoopProposal",
     "LoopProposalValidation",
     "Outcome",
+    "PrivacyAssessment",
+    "PrivacyCategory",
+    "PrivacyClassifier",
+    "PrivacyLevel",
     "RecordErrorRequest",
     "SaveArrangementRequest",
     "SavedArrangement",
