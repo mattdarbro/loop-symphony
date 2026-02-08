@@ -2,13 +2,13 @@
 
 > Derived from PRD v2.0. Each numbered phase maps to the PRD's build plan.
 > Lettered sub-phases are implementation steps within each numbered phase.
-> Updated: 2026-02-04
+> Updated: 2026-02-08
 
 ---
 
 ## Current State
 
-**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE. Platform Identity: COMPLETE. Phase 3: COMPLETE. Phase 4A: COMPLETE. Phase 4B: COMPLETE. Phase 4C: COMPLETE.** 706 server tests + 50 local tests.
+**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE. Platform Identity: COMPLETE. Phase 3: COMPLETE. Phase 4A: COMPLETE. Phase 4B: COMPLETE. Phase 4C: COMPLETE. Phase 5A: COMPLETE.** 764 server tests + 50 local tests.
 
 | Component | Status | Notes |
 |-----------|--------|-------|
@@ -744,13 +744,37 @@ server handles reasoning.
 
 > PRD Weeks 17-18. Learnable knowledge layer for user guidance.
 
-### 5A: Knowledge File System
+### 5A: Knowledge File System -- COMPLETE
 
-- [ ] Implement `capabilities.md` -- what the system can do
-- [ ] Implement `boundaries.md` -- what it can't do, with alternatives
-- [ ] Implement `patterns.md` -- common user patterns and interventions
-- [ ] Implement `changelog.md` -- what's new
-- [ ] Implement `user/{id}.md` -- per-user learned patterns
+> PRD 13.1: Learnable knowledge files — living documents capturing system capabilities, boundaries, patterns, and per-user learnings.
+
+- [x] Knowledge models: KnowledgeCategory (5 types), KnowledgeSource (6 sources), KnowledgeEntry, KnowledgeFile, UserKnowledge
+- [x] Database migration (007_knowledge_entries.sql) with category, source, user_id indexes
+- [x] DatabaseClient CRUD: create, list, get, update, delete (soft), delete_by_source
+- [x] Seed data: 9 capabilities, 6 boundaries, 4 patterns, 4 changelog entries (idempotent)
+- [x] KnowledgeManager: get_file(), refresh_from_trackers(), add_entry(), get_user_knowledge()
+- [x] Tracker aggregation: ErrorTracker patterns → boundaries/patterns, ArrangementTracker → capabilities/patterns, TrustTracker → user entries
+- [x] Markdown rendering with source grouping and confidence annotations
+- [x] `capabilities.md` — what the system can do (seeded + arrangement-proven)
+- [x] `boundaries.md` — what it can't do (seeded + error-learned limitations)
+- [x] `patterns.md` — common user patterns and workflows (seeded + learned)
+- [x] `changelog.md` — what's new (seeded per phase)
+- [x] `user/{id}.md` — per-user trust profile, learned patterns, preferences
+
+**API endpoints:**
+- `GET /knowledge/capabilities` — capabilities knowledge file
+- `GET /knowledge/boundaries` — boundaries knowledge file
+- `GET /knowledge/patterns` — patterns knowledge file
+- `GET /knowledge/changelog` — changelog knowledge file
+- `GET /knowledge/user/{user_id}` — per-user knowledge
+- `POST /knowledge/entries` — create manual entry
+- `GET /knowledge/entries?category=&source=` — list raw entries
+- `POST /knowledge/refresh` — refresh from in-memory trackers
+
+**Files created:** `models/knowledge.py`, `db/migrations/007_knowledge_entries.sql`, `manager/knowledge_seed.py`, `manager/knowledge_manager.py`, `tests/test_knowledge.py` (58 tests)
+**Files modified:** `db/client.py`, `api/routes.py`, `models/__init__.py`, `manager/__init__.py`
+
+**Depends on:** Phase 3H (ErrorTracker), Phase 3C (ArrangementTracker), Phase 3D (TrustTracker)
 
 ### 5B: Knowledge Sync
 

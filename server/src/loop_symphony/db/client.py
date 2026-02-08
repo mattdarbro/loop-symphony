@@ -584,6 +584,158 @@ class DatabaseClient:
         }).eq("id", str(arrangement_id)).execute()
 
     # -------------------------------------------------------------------------
+    # Knowledge Entry methods (Phase 5A)
+    # -------------------------------------------------------------------------
+
+    async def create_knowledge_entry(
+        self,
+        entry_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Create a knowledge entry.
+
+        Args:
+            entry_data: The entry data to insert
+
+        Returns:
+            The created entry record
+        """
+        result = (
+            self.client.table("knowledge_entries")
+            .insert(entry_data)
+            .execute()
+        )
+        return result.data[0]
+
+    async def list_knowledge_entries(
+        self,
+        category: str | None = None,
+        user_id: str | None = None,
+        source: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List knowledge entries with optional filters.
+
+        Args:
+            category: Filter by category
+            user_id: Filter by user_id (None returns global entries)
+            source: Filter by source
+
+        Returns:
+            List of entry records
+        """
+        query = (
+            self.client.table("knowledge_entries")
+            .select("*")
+            .eq("is_active", True)
+        )
+
+        if category is not None:
+            query = query.eq("category", category)
+        if user_id is not None:
+            query = query.eq("user_id", user_id)
+        if source is not None:
+            query = query.eq("source", source)
+
+        result = query.order("created_at", desc=True).execute()
+        return result.data
+
+    async def get_knowledge_entry(
+        self,
+        entry_id: str,
+    ) -> dict[str, Any] | None:
+        """Get a knowledge entry by ID.
+
+        Args:
+            entry_id: The entry ID
+
+        Returns:
+            The entry record or None
+        """
+        result = (
+            self.client.table("knowledge_entries")
+            .select("*")
+            .eq("id", entry_id)
+            .execute()
+        )
+        if result.data and len(result.data) > 0:
+            return result.data[0]
+        return None
+
+    async def update_knowledge_entry(
+        self,
+        entry_id: str,
+        updates: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Update a knowledge entry.
+
+        Args:
+            entry_id: The entry ID
+            updates: Fields to update
+
+        Returns:
+            The updated entry or None
+        """
+        updates["updated_at"] = datetime.now(UTC).isoformat()
+        result = (
+            self.client.table("knowledge_entries")
+            .update(updates)
+            .eq("id", entry_id)
+            .execute()
+        )
+        if result.data and len(result.data) > 0:
+            return result.data[0]
+        return None
+
+    async def delete_knowledge_entry(
+        self,
+        entry_id: str,
+    ) -> bool:
+        """Soft-delete a knowledge entry.
+
+        Args:
+            entry_id: The entry ID
+
+        Returns:
+            True if deleted, False if not found
+        """
+        result = (
+            self.client.table("knowledge_entries")
+            .update({
+                "is_active": False,
+                "updated_at": datetime.now(UTC).isoformat(),
+            })
+            .eq("id", entry_id)
+            .execute()
+        )
+        return len(result.data) > 0
+
+    async def delete_knowledge_entries_by_source(
+        self,
+        category: str,
+        source: str,
+    ) -> int:
+        """Soft-delete all entries for a category+source (used during refresh).
+
+        Args:
+            category: The knowledge category
+            source: The knowledge source
+
+        Returns:
+            Number of entries deleted
+        """
+        result = (
+            self.client.table("knowledge_entries")
+            .update({
+                "is_active": False,
+                "updated_at": datetime.now(UTC).isoformat(),
+            })
+            .eq("category", category)
+            .eq("source", source)
+            .eq("is_active", True)
+            .execute()
+        )
+        return len(result.data)
+
+    # -------------------------------------------------------------------------
     # Health Check
     # -------------------------------------------------------------------------
 

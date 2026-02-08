@@ -54,6 +54,15 @@ from loop_symphony.privacy.classifier import (
     PrivacyClassifier,
     PrivacyLevel,
 )
+from loop_symphony.models.knowledge import (
+    KnowledgeCategory,
+    KnowledgeEntry,
+    KnowledgeEntryCreate,
+    KnowledgeFile,
+    KnowledgeRefreshResult,
+    KnowledgeSource,
+    UserKnowledge,
+)
 from loop_symphony.models.intent import (
     Intent,
     IntentType,
@@ -98,6 +107,12 @@ __all__ = [
     "infer_intent",
     "Intent",
     "IntentType",
+    "KnowledgeCategory",
+    "KnowledgeEntry",
+    "KnowledgeEntryCreate",
+    "KnowledgeFile",
+    "KnowledgeRefreshResult",
+    "KnowledgeSource",
     "LearningInsight",
     "LoopExecutionPlan",
     "ChannelConfig",
@@ -133,5 +148,6 @@ __all__ = [
     "TrustMetrics",
     "TrustSuggestion",
     "UrgencyLevel",
+    "UserKnowledge",
     "UserProfile",
 ]

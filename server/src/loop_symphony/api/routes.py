@@ -46,8 +46,17 @@ from loop_symphony.models.task import (
 from loop_symphony.models.trust import TrustLevelUpdate, TrustMetrics, TrustSuggestion
 from loop_symphony.models.health import SystemHealth
 from loop_symphony.manager.task_manager import TaskManager, TaskState
+from loop_symphony.manager.error_tracker import ErrorTracker
+from loop_symphony.manager.knowledge_manager import KnowledgeManager
 from loop_symphony.manager.trust_tracker import TrustTracker
 from loop_symphony.manager.room_registry import RoomRegistry, RoomRegistration, RoomHeartbeat, RoomInfo
+from loop_symphony.models.knowledge import (
+    KnowledgeCategory,
+    KnowledgeEntryCreate,
+    KnowledgeFile,
+    KnowledgeRefreshResult,
+    UserKnowledge,
+)
 from loop_symphony.tools.claude import ClaudeClient
 from loop_symphony.tools.registry import ToolRegistry
 from loop_symphony.tools.tavily import TavilyClient
@@ -64,6 +73,8 @@ _event_bus: EventBus | None = None
 _heartbeat_worker: HeartbeatWorker | None = None
 _trust_tracker: TrustTracker | None = None
 _task_manager: TaskManager | None = None
+_error_tracker: ErrorTracker | None = None
+_knowledge_manager: KnowledgeManager | None = None
 
 
 def _build_registry() -> ToolRegistry:
@@ -130,6 +141,30 @@ def get_task_manager() -> TaskManager:
     if _task_manager is None:
         _task_manager = TaskManager()
     return _task_manager
+
+
+def get_error_tracker() -> ErrorTracker:
+    """Get or create error tracker instance."""
+    global _error_tracker
+    if _error_tracker is None:
+        _error_tracker = ErrorTracker()
+    return _error_tracker
+
+
+def get_knowledge_manager() -> KnowledgeManager:
+    """Get or create knowledge manager instance.
+
+    Seeds baseline knowledge on first initialization.
+    """
+    global _knowledge_manager
+    if _knowledge_manager is None:
+        _knowledge_manager = KnowledgeManager(
+            db=get_db_client(),
+            error_tracker=get_error_tracker(),
+            arrangement_tracker=get_conductor().tracker,
+            trust_tracker=get_trust_tracker(),
+        )
+    return _knowledge_manager
 
 
 async def execute_task_background(
@@ -1624,3 +1659,78 @@ async def room_degradation_status(
     capabilities are available across the system.
     """
     return room_registry.get_degradation_status()
+
+
+# =============================================================================
+# Knowledge Layer (Phase 5A)
+# =============================================================================
+
+
+@router.get("/knowledge/capabilities", response_model=KnowledgeFile)
+async def get_capabilities_knowledge(
+    km: Annotated[KnowledgeManager, Depends(get_knowledge_manager)],
+) -> KnowledgeFile:
+    """Get the capabilities knowledge file."""
+    return await km.get_file(KnowledgeCategory.CAPABILITIES)
+
+
+@router.get("/knowledge/boundaries", response_model=KnowledgeFile)
+async def get_boundaries_knowledge(
+    km: Annotated[KnowledgeManager, Depends(get_knowledge_manager)],
+) -> KnowledgeFile:
+    """Get the boundaries knowledge file."""
+    return await km.get_file(KnowledgeCategory.BOUNDARIES)
+
+
+@router.get("/knowledge/patterns", response_model=KnowledgeFile)
+async def get_patterns_knowledge(
+    km: Annotated[KnowledgeManager, Depends(get_knowledge_manager)],
+) -> KnowledgeFile:
+    """Get the patterns knowledge file."""
+    return await km.get_file(KnowledgeCategory.PATTERNS)
+
+
+@router.get("/knowledge/changelog", response_model=KnowledgeFile)
+async def get_changelog_knowledge(
+    km: Annotated[KnowledgeManager, Depends(get_knowledge_manager)],
+) -> KnowledgeFile:
+    """Get the changelog knowledge file."""
+    return await km.get_file(KnowledgeCategory.CHANGELOG)
+
+
+@router.get("/knowledge/user/{user_id}", response_model=UserKnowledge)
+async def get_user_knowledge(
+    user_id: str,
+    km: Annotated[KnowledgeManager, Depends(get_knowledge_manager)],
+) -> UserKnowledge:
+    """Get per-user knowledge."""
+    return await km.get_user_knowledge(user_id)
+
+
+@router.post("/knowledge/entries")
+async def create_knowledge_entry(
+    entry: KnowledgeEntryCreate,
+    km: Annotated[KnowledgeManager, Depends(get_knowledge_manager)],
+) -> dict:
+    """Create a manual knowledge entry."""
+    created = await km.add_entry(entry)
+    return created.model_dump(mode="json")
+
+
+@router.get("/knowledge/entries")
+async def list_knowledge_entries(
+    km: Annotated[KnowledgeManager, Depends(get_knowledge_manager)],
+    category: str | None = None,
+    source: str | None = None,
+) -> list[dict]:
+    """List knowledge entries with optional filters."""
+    entries = await km.list_entries(category=category, source=source)
+    return [e.model_dump(mode="json") for e in entries]
+
+
+@router.post("/knowledge/refresh", response_model=KnowledgeRefreshResult)
+async def refresh_knowledge(
+    km: Annotated[KnowledgeManager, Depends(get_knowledge_manager)],
+) -> KnowledgeRefreshResult:
+    """Refresh knowledge entries from in-memory trackers."""
+    return await km.refresh_from_trackers()
