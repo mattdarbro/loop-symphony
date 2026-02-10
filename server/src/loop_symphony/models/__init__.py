@@ -77,6 +77,12 @@ from loop_symphony.models.intent import (
     UrgencyLevel,
     infer_intent,
 )
+from loop_symphony.models.intervention import (
+    Intervention,
+    InterventionContext,
+    InterventionResult,
+    InterventionType,
+)
 from loop_symphony.models.outcome import Outcome
 from loop_symphony.models.trust import TrustLevelUpdate, TrustMetrics, TrustSuggestion
 from loop_symphony.models.task import (
@@ -115,6 +121,10 @@ __all__ = [
     "infer_intent",
     "Intent",
     "IntentType",
+    "Intervention",
+    "InterventionContext",
+    "InterventionResult",
+    "InterventionType",
     "KnowledgeCategory",
     "KnowledgeEntry",
     "KnowledgeEntryCreate",

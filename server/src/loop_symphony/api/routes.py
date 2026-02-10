@@ -47,6 +47,7 @@ from loop_symphony.models.trust import TrustLevelUpdate, TrustMetrics, TrustSugg
 from loop_symphony.models.health import SystemHealth
 from loop_symphony.manager.task_manager import TaskManager, TaskState
 from loop_symphony.manager.error_tracker import ErrorTracker
+from loop_symphony.manager.intervention_engine import InterventionEngine
 from loop_symphony.manager.knowledge_manager import KnowledgeManager
 from loop_symphony.manager.knowledge_sync_manager import KnowledgeSyncManager
 from loop_symphony.manager.trust_tracker import TrustTracker
@@ -79,6 +80,7 @@ _heartbeat_worker: HeartbeatWorker | None = None
 _trust_tracker: TrustTracker | None = None
 _task_manager: TaskManager | None = None
 _error_tracker: ErrorTracker | None = None
+_intervention_engine: InterventionEngine | None = None
 _knowledge_manager: KnowledgeManager | None = None
 _knowledge_sync_manager: KnowledgeSyncManager | None = None
 
@@ -155,6 +157,17 @@ def get_error_tracker() -> ErrorTracker:
     if _error_tracker is None:
         _error_tracker = ErrorTracker()
     return _error_tracker
+
+
+def get_intervention_engine() -> InterventionEngine:
+    """Get or create intervention engine instance."""
+    global _intervention_engine
+    if _intervention_engine is None:
+        _intervention_engine = InterventionEngine(
+            error_tracker=get_error_tracker(),
+            trust_tracker=get_trust_tracker(),
+        )
+    return _intervention_engine
 
 
 def get_knowledge_manager() -> KnowledgeManager:
@@ -235,6 +248,17 @@ async def execute_task_background(
 
         # Execute the task
         response = await conductor.execute(request)
+
+        # Post-task interventions (fail-open)
+        try:
+            engine = get_intervention_engine()
+            intervention_result = engine.evaluate_task(request, response)
+            if intervention_result.interventions:
+                response = InterventionEngine.enrich_response(
+                    response, intervention_result
+                )
+        except Exception as intervention_err:
+            logger.warning(f"Intervention evaluation failed: {intervention_err}")
 
         # Update database with result
         await db.complete_task(request.id, response)
@@ -1798,3 +1822,51 @@ async def sync_status(
 ) -> dict:
     """Get knowledge sync status for all rooms."""
     return await sync_manager.get_sync_status()
+
+
+# =========================================================================
+# Interventions (Phase 5C)
+# =========================================================================
+
+
+@router.get("/interventions/status")
+async def intervention_status(
+    engine: Annotated[InterventionEngine, Depends(get_intervention_engine)],
+) -> dict:
+    """Get intervention engine status."""
+    return engine.get_status()
+
+
+@router.post("/interventions/evaluate")
+async def evaluate_interventions(
+    request: dict,
+    engine: Annotated[InterventionEngine, Depends(get_intervention_engine)],
+) -> dict:
+    """Dry-run intervention evaluation for testing.
+
+    Accepts a dict with 'query' and optional response fields,
+    builds an InterventionContext, and returns the evaluation result.
+    """
+    from loop_symphony.models.intervention import InterventionContext
+
+    ctx = InterventionContext(
+        query=request.get("query", ""),
+        response_summary=request.get("response_summary", ""),
+        response_outcome=request.get("response_outcome", "complete"),
+        response_confidence=request.get("response_confidence", 0.8),
+        instrument_used=request.get("instrument_used", "note"),
+        intent_type=request.get("intent_type"),
+        trust_level=request.get("trust_level", 0),
+        error_patterns=request.get("error_patterns", []),
+        recent_queries=request.get("recent_queries", []),
+        available_instruments=request.get(
+            "available_instruments",
+            ["note", "research", "synthesis", "vision"],
+        ),
+        suggested_followups=request.get("suggested_followups", []),
+    )
+    result = engine.evaluate(ctx)
+    return {
+        "interventions": [i.model_dump() for i in result.interventions],
+        "count": len(result.interventions),
+    }

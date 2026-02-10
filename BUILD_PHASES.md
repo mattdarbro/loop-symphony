@@ -8,7 +8,7 @@
 
 ## Current State
 
-**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE. Platform Identity: COMPLETE. Phase 3: COMPLETE. Phase 4A: COMPLETE. Phase 4B: COMPLETE. Phase 4C: COMPLETE. Phase 5A: COMPLETE. Phase 5B: COMPLETE.** 803 server tests + 83 local tests.
+**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE. Platform Identity: COMPLETE. Phase 3: COMPLETE. Phase 4A: COMPLETE. Phase 4B: COMPLETE. Phase 4C: COMPLETE. Phase 5A: COMPLETE. Phase 5B: COMPLETE. Phase 5C: COMPLETE.** 867 server tests + 83 local tests.
 
 | Component | Status | Notes |
 |-----------|--------|-------|
@@ -808,14 +808,18 @@ server handles reasoning.
 
 **Depends on:** Phase 5A (Knowledge File System), Phase 4A (Local Room), Phase 4C (Cross-Room)
 
-### 5C: Four Interventions
+### 5C: Four Interventions — COMPLETE
 
 > PRD 13.3: Proactive suggestions, pushback, scoping, capability education.
 
-- [ ] Proactive suggestion engine (detect recurring pain points)
-- [ ] Pushback on unrealistic requests (redirect to achievable)
-- [ ] Scoping for overwhelming requests (break down)
-- [ ] Capability education (gentle feature discovery)
+- [x] Proactive suggestion engine (detect recurring pain points)
+- [x] Pushback on unrealistic requests (redirect to achievable)
+- [x] Scoping for overwhelming requests (break down)
+- [x] Capability education (gentle feature discovery)
+- [x] InterventionEngine with trust-level gating (0=all, 1=no education, 2=proactive+pushback)
+- [x] Post-task enrichment in execute_task_background (fail-open)
+- [x] Dry-run evaluation endpoint (POST /interventions/evaluate)
+- [x] 64 tests (models, 4 detectors, engine, endpoints, integration)
 
 ### Phase 5 Verification
 
