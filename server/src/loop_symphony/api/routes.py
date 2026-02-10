@@ -48,6 +48,7 @@ from loop_symphony.models.health import SystemHealth
 from loop_symphony.manager.task_manager import TaskManager, TaskState
 from loop_symphony.manager.error_tracker import ErrorTracker
 from loop_symphony.manager.knowledge_manager import KnowledgeManager
+from loop_symphony.manager.knowledge_sync_manager import KnowledgeSyncManager
 from loop_symphony.manager.trust_tracker import TrustTracker
 from loop_symphony.manager.room_registry import RoomRegistry, RoomRegistration, RoomHeartbeat, RoomInfo
 from loop_symphony.models.knowledge import (
@@ -56,6 +57,10 @@ from loop_symphony.models.knowledge import (
     KnowledgeFile,
     KnowledgeRefreshResult,
     UserKnowledge,
+)
+from loop_symphony.models.knowledge_sync import (
+    LearningAggregationResult,
+    RoomLearningBatch,
 )
 from loop_symphony.tools.claude import ClaudeClient
 from loop_symphony.tools.registry import ToolRegistry
@@ -75,6 +80,7 @@ _trust_tracker: TrustTracker | None = None
 _task_manager: TaskManager | None = None
 _error_tracker: ErrorTracker | None = None
 _knowledge_manager: KnowledgeManager | None = None
+_knowledge_sync_manager: KnowledgeSyncManager | None = None
 
 
 def _build_registry() -> ToolRegistry:
@@ -165,6 +171,17 @@ def get_knowledge_manager() -> KnowledgeManager:
             trust_tracker=get_trust_tracker(),
         )
     return _knowledge_manager
+
+
+def get_knowledge_sync_manager() -> KnowledgeSyncManager:
+    """Get or create knowledge sync manager instance."""
+    global _knowledge_sync_manager
+    if _knowledge_sync_manager is None:
+        _knowledge_sync_manager = KnowledgeSyncManager(
+            db=get_db_client(),
+            knowledge_manager=get_knowledge_manager(),
+        )
+    return _knowledge_sync_manager
 
 
 async def execute_task_background(
@@ -1582,10 +1599,13 @@ async def deregister_room(
 async def room_heartbeat(
     heartbeat: RoomHeartbeat,
     room_registry: Annotated[RoomRegistry, Depends(get_room_registry)],
+    sync_manager: Annotated[KnowledgeSyncManager, Depends(get_knowledge_sync_manager)],
 ) -> dict:
     """Process a heartbeat from a room.
 
     Rooms should send heartbeats periodically to indicate they're still online.
+    If the room includes last_knowledge_version, the response will include
+    knowledge_updates with entries changed since that version.
     """
     found = room_registry.heartbeat(heartbeat)
 
@@ -1595,7 +1615,20 @@ async def room_heartbeat(
             detail=f"Room not found: {heartbeat.room_id}. Please re-register.",
         )
 
-    return {"status": "ok", "room_id": heartbeat.room_id}
+    response: dict = {"status": "ok", "room_id": heartbeat.room_id}
+
+    # Include knowledge sync push if room requests it
+    if heartbeat.last_knowledge_version is not None:
+        push = await sync_manager.get_sync_push(heartbeat.room_id)
+        if push.entries or push.removed_ids:
+            response["knowledge_updates"] = push.model_dump(mode="json")
+            await sync_manager.record_sync(
+                heartbeat.room_id, push.server_version
+            )
+        else:
+            response["knowledge_updates"] = None
+
+    return response
 
 
 @router.get("/rooms")
@@ -1734,3 +1767,34 @@ async def refresh_knowledge(
 ) -> KnowledgeRefreshResult:
     """Refresh knowledge entries from in-memory trackers."""
     return await km.refresh_from_trackers()
+
+
+# =========================================================================
+# Knowledge Sync (Phase 5B)
+# =========================================================================
+
+
+@router.post("/knowledge/learnings")
+async def accept_learnings(
+    batch: RoomLearningBatch,
+    sync_manager: Annotated[KnowledgeSyncManager, Depends(get_knowledge_sync_manager)],
+) -> dict:
+    """Accept a batch of learnings from a room."""
+    count = await sync_manager.accept_learnings(batch)
+    return {"accepted": count, "room_id": batch.room_id}
+
+
+@router.post("/knowledge/aggregate", response_model=LearningAggregationResult)
+async def aggregate_learnings(
+    sync_manager: Annotated[KnowledgeSyncManager, Depends(get_knowledge_sync_manager)],
+) -> LearningAggregationResult:
+    """Aggregate unprocessed room learnings into knowledge entries."""
+    return await sync_manager.aggregate_learnings()
+
+
+@router.get("/knowledge/sync/status")
+async def sync_status(
+    sync_manager: Annotated[KnowledgeSyncManager, Depends(get_knowledge_sync_manager)],
+) -> dict:
+    """Get knowledge sync status for all rooms."""
+    return await sync_manager.get_sync_status()

@@ -14,6 +14,8 @@ import httpx
 from pydantic import BaseModel, Field
 
 from local_room.config import LocalRoomConfig
+from local_room.knowledge_cache import KnowledgeCache
+from local_room.learning_reporter import LearningReporter
 from local_room.tools.ollama import OllamaClient
 from local_room.instruments.note import LocalNoteInstrument
 from local_room.router import TaskRouter, RoutingDecision, RoutingResult
@@ -75,6 +77,11 @@ class LocalRoom:
             local_capabilities=config.capabilities,
         )
         self._privacy_classifier = PrivacyClassifier()
+        self._knowledge_cache = KnowledgeCache()
+        self._learning_reporter = LearningReporter(
+            server_url=config.server_url,
+            room_id=config.room_id,
+        )
         self._registered = False
         self._heartbeat_task: asyncio.Task | None = None
 
@@ -110,6 +117,16 @@ class LocalRoom:
     def privacy_classifier(self) -> PrivacyClassifier:
         """Get the privacy classifier."""
         return self._privacy_classifier
+
+    @property
+    def knowledge_cache(self) -> KnowledgeCache:
+        """Get the knowledge cache."""
+        return self._knowledge_cache
+
+    @property
+    def learning_reporter(self) -> LearningReporter:
+        """Get the learning reporter."""
+        return self._learning_reporter
 
     async def route_task(
         self,
@@ -223,24 +240,38 @@ class LocalRoom:
                 logger.error(f"Heartbeat error: {e}")
 
     async def _send_heartbeat(self) -> bool:
-        """Send a heartbeat to the server."""
+        """Send a heartbeat to the server.
+
+        Includes knowledge version for sync piggybacking.
+        Processes knowledge_updates from the response.
+        """
         # Get current health status
         ollama_health = await self._ollama.health_check()
-        status = "online" if ollama_health.get("healthy") else "degraded"
+        hb_status = "online" if ollama_health.get("healthy") else "degraded"
+
+        payload: dict = {
+            "room_id": self._config.room_id,
+            "status": hb_status,
+            "capabilities": list(self._config.capabilities),
+            "last_knowledge_version": self._knowledge_cache.server_version,
+        }
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(
                     f"{self._config.server_url}/rooms/heartbeat",
-                    json={
-                        "room_id": self._config.room_id,
-                        "status": status,
-                        "capabilities": list(self._config.capabilities),
-                    },
+                    json=payload,
                 )
 
                 if response.status_code == 200:
                     self._registered = True
+
+                    # Process knowledge sync from response
+                    data = response.json()
+                    knowledge_updates = data.get("knowledge_updates")
+                    if knowledge_updates:
+                        self._knowledge_cache.apply_sync(knowledge_updates)
+
                     return True
                 elif response.status_code == 404:
                     # Room not found - re-register

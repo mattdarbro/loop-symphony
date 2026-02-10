@@ -593,12 +593,16 @@ class DatabaseClient:
     ) -> dict[str, Any]:
         """Create a knowledge entry.
 
+        Bumps the global knowledge version and stamps the entry.
+
         Args:
             entry_data: The entry data to insert
 
         Returns:
             The created entry record
         """
+        version = await self.bump_knowledge_version()
+        entry_data["version"] = version
         result = (
             self.client.table("knowledge_entries")
             .insert(entry_data)
@@ -715,6 +719,8 @@ class DatabaseClient:
     ) -> int:
         """Soft-delete all entries for a category+source (used during refresh).
 
+        Bumps the global knowledge version and stamps deactivated entries.
+
         Args:
             category: The knowledge category
             source: The knowledge source
@@ -722,15 +728,226 @@ class DatabaseClient:
         Returns:
             Number of entries deleted
         """
+        # Check if there are entries to delete first
+        check = (
+            self.client.table("knowledge_entries")
+            .select("id")
+            .eq("category", category)
+            .eq("source", source)
+            .eq("is_active", True)
+            .execute()
+        )
+        if not check.data:
+            return 0
+
+        version = await self.bump_knowledge_version()
         result = (
             self.client.table("knowledge_entries")
             .update({
                 "is_active": False,
+                "version": version,
                 "updated_at": datetime.now(UTC).isoformat(),
             })
             .eq("category", category)
             .eq("source", source)
             .eq("is_active", True)
+            .execute()
+        )
+        return len(result.data)
+
+    # -------------------------------------------------------------------------
+    # Knowledge Sync methods (Phase 5B)
+    # -------------------------------------------------------------------------
+
+    async def bump_knowledge_version(self) -> int:
+        """Increment global knowledge version counter.
+
+        Returns:
+            The new version number
+        """
+        # Get current version
+        result = (
+            self.client.table("knowledge_sync_state")
+            .select("current_version")
+            .eq("key", "global")
+            .execute()
+        )
+
+        if result.data:
+            current = result.data[0]["current_version"]
+            new_version = current + 1
+            self.client.table("knowledge_sync_state").update({
+                "current_version": new_version,
+                "updated_at": datetime.now(UTC).isoformat(),
+            }).eq("key", "global").execute()
+        else:
+            new_version = 1
+            self.client.table("knowledge_sync_state").insert({
+                "key": "global",
+                "current_version": new_version,
+            }).execute()
+
+        return new_version
+
+    async def get_knowledge_version(self) -> int:
+        """Get current global knowledge version.
+
+        Returns:
+            Current version number (0 if not initialized)
+        """
+        result = (
+            self.client.table("knowledge_sync_state")
+            .select("current_version")
+            .eq("key", "global")
+            .execute()
+        )
+        if result.data:
+            return result.data[0]["current_version"]
+        return 0
+
+    async def get_entries_since_version(
+        self,
+        since_version: int,
+    ) -> list[dict[str, Any]]:
+        """Get active knowledge entries changed since a version.
+
+        Args:
+            since_version: Return entries with version > this
+
+        Returns:
+            List of entry records
+        """
+        result = (
+            self.client.table("knowledge_entries")
+            .select("*")
+            .gt("version", since_version)
+            .eq("is_active", True)
+            .order("version")
+            .execute()
+        )
+        return result.data
+
+    async def get_removed_since_version(
+        self,
+        since_version: int,
+    ) -> list[str]:
+        """Get IDs of entries deactivated since a version.
+
+        Args:
+            since_version: Return entries with version > this
+
+        Returns:
+            List of entry IDs that were deactivated
+        """
+        result = (
+            self.client.table("knowledge_entries")
+            .select("id")
+            .gt("version", since_version)
+            .eq("is_active", False)
+            .execute()
+        )
+        return [row["id"] for row in result.data]
+
+    async def get_room_sync_state(
+        self,
+        room_id: str,
+    ) -> dict[str, Any] | None:
+        """Get sync state for a room.
+
+        Args:
+            room_id: The room ID
+
+        Returns:
+            Sync state record or None
+        """
+        result = (
+            self.client.table("room_sync_state")
+            .select("*")
+            .eq("room_id", room_id)
+            .execute()
+        )
+        if result.data and len(result.data) > 0:
+            return result.data[0]
+        return None
+
+    async def update_room_sync_state(
+        self,
+        room_id: str,
+        version: int,
+    ) -> None:
+        """Update (upsert) sync state for a room.
+
+        Args:
+            room_id: The room ID
+            version: The version the room is now synced to
+        """
+        self.client.table("room_sync_state").upsert({
+            "room_id": room_id,
+            "last_synced_version": version,
+            "last_sync_at": datetime.now(UTC).isoformat(),
+        }).execute()
+
+    async def create_room_learnings(
+        self,
+        learnings: list[dict[str, Any]],
+    ) -> int:
+        """Batch insert room learnings.
+
+        Args:
+            learnings: List of learning dicts to insert
+
+        Returns:
+            Number of learnings inserted
+        """
+        if not learnings:
+            return 0
+        result = (
+            self.client.table("room_learnings")
+            .insert(learnings)
+            .execute()
+        )
+        return len(result.data)
+
+    async def get_unprocessed_learnings(
+        self,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Get unprocessed room learnings.
+
+        Args:
+            limit: Maximum number to return
+
+        Returns:
+            List of unprocessed learning records
+        """
+        result = (
+            self.client.table("room_learnings")
+            .select("*")
+            .eq("processed", False)
+            .order("created_at")
+            .limit(limit)
+            .execute()
+        )
+        return result.data
+
+    async def mark_learnings_processed(
+        self,
+        ids: list[str],
+    ) -> int:
+        """Mark learnings as processed.
+
+        Args:
+            ids: List of learning IDs to mark
+
+        Returns:
+            Number of learnings marked
+        """
+        if not ids:
+            return 0
+        result = (
+            self.client.table("room_learnings")
+            .update({"processed": True})
+            .in_("id", ids)
             .execute()
         )
         return len(result.data)

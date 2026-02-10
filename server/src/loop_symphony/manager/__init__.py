@@ -15,6 +15,7 @@ from loop_symphony.manager.conductor import Conductor
 from loop_symphony.manager.cross_room_composition import CrossRoomComposition, RoomBranch
 from loop_symphony.manager.error_tracker import ErrorTracker, classify_exception
 from loop_symphony.manager.knowledge_manager import KnowledgeManager
+from loop_symphony.manager.knowledge_sync_manager import KnowledgeSyncManager
 from loop_symphony.manager.loop_executor import LoopExecutor
 from loop_symphony.manager.room_client import RoomClient, RoomDelegationResult
 from loop_symphony.manager.room_registry import RoomInfo, RoomRegistry, RoomRegistration, RoomHeartbeat
@@ -35,6 +36,7 @@ __all__ = [
     "CrossRoomComposition",
     "ErrorTracker",
     "KnowledgeManager",
+    "KnowledgeSyncManager",
     "LoopExecutor",
     "LoopProposer",
     "ParallelComposition",

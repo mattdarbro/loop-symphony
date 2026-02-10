@@ -63,6 +63,14 @@ from loop_symphony.models.knowledge import (
     KnowledgeSource,
     UserKnowledge,
 )
+from loop_symphony.models.knowledge_sync import (
+    KnowledgeSyncEntry,
+    KnowledgeSyncPush,
+    KnowledgeSyncState,
+    LearningAggregationResult,
+    RoomLearning,
+    RoomLearningBatch,
+)
 from loop_symphony.models.intent import (
     Intent,
     IntentType,
@@ -113,6 +121,10 @@ __all__ = [
     "KnowledgeFile",
     "KnowledgeRefreshResult",
     "KnowledgeSource",
+    "KnowledgeSyncEntry",
+    "KnowledgeSyncPush",
+    "KnowledgeSyncState",
+    "LearningAggregationResult",
     "LearningInsight",
     "LoopExecutionPlan",
     "ChannelConfig",
@@ -133,6 +145,8 @@ __all__ = [
     "PrivacyClassifier",
     "PrivacyLevel",
     "RecordErrorRequest",
+    "RoomLearning",
+    "RoomLearningBatch",
     "SaveArrangementRequest",
     "SavedArrangement",
     "Source",

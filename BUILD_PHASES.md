@@ -8,7 +8,7 @@
 
 ## Current State
 
-**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE. Platform Identity: COMPLETE. Phase 3: COMPLETE. Phase 4A: COMPLETE. Phase 4B: COMPLETE. Phase 4C: COMPLETE. Phase 5A: COMPLETE.** 764 server tests + 50 local tests.
+**Phase 1 Server Room: COMPLETE. Bridge A-E: COMPLETE. Phase 2: COMPLETE. Platform Identity: COMPLETE. Phase 3: COMPLETE. Phase 4A: COMPLETE. Phase 4B: COMPLETE. Phase 4C: COMPLETE. Phase 5A: COMPLETE. Phase 5B: COMPLETE.** 803 server tests + 83 local tests.
 
 | Component | Status | Notes |
 |-----------|--------|-------|
@@ -776,11 +776,37 @@ server handles reasoning.
 
 **Depends on:** Phase 3H (ErrorTracker), Phase 3C (ArrangementTracker), Phase 3D (TrustTracker)
 
-### 5B: Knowledge Sync
+### 5B: Knowledge Sync -- COMPLETE
 
-- [ ] Server pushes knowledge updates to iOS rooms
-- [ ] iOS syncs user-specific learnings back to Server
-- [ ] Server aggregates cross-user patterns into global patterns.md
+> Bidirectional knowledge sync between server and rooms via heartbeat piggybacking.
+
+- [x] Sync models: KnowledgeSyncEntry, KnowledgeSyncPush, KnowledgeSyncState, RoomLearning, RoomLearningBatch, LearningAggregationResult
+- [x] KnowledgeSource extended: ROOM_LEARNING, AGGREGATED; version field on KnowledgeEntry
+- [x] Database migration (008_knowledge_sync.sql): knowledge_sync_state, room_sync_state, room_learnings tables; version column on knowledge_entries
+- [x] DatabaseClient sync methods: bump_knowledge_version, get_entries_since_version, get_removed_since_version, room sync state CRUD, room learnings batch insert/process
+- [x] Version bumping on create_knowledge_entry() and delete_knowledge_entries_by_source()
+- [x] KnowledgeSyncManager: get_sync_push() (delta computation), record_sync(), accept_learnings(), aggregate_learnings() (3+ rooms → AGGREGATED), get_sync_status()
+- [x] Heartbeat piggybacking: POST /rooms/heartbeat accepts last_knowledge_version, returns knowledge_updates in response
+- [x] Local Room KnowledgeCache: in-memory entry store, apply_sync(), get_context_summary() for LLM prompt injection
+- [x] Local Room LearningReporter: buffered observations, deduplication by title, flush to server POST /knowledge/learnings
+- [x] LocalRoom integration: cache + reporter as instance attributes, heartbeat sends version + processes sync response
+
+**Server API endpoints (new):**
+- `POST /knowledge/learnings` — accept room learning batch
+- `POST /knowledge/aggregate` — trigger learning aggregation
+- `GET /knowledge/sync/status` — per-room sync state and global version
+
+**Local Room API endpoints (new):**
+- `GET /knowledge/cache` — cache statistics
+- `GET /knowledge/cache/entries?category=` — list cached entries
+- `POST /knowledge/learnings/record` — manually record a learning
+- `POST /knowledge/learnings/flush` — force flush to server
+- `GET /knowledge/learnings/stats` — reporter statistics
+
+**Files created:** `models/knowledge_sync.py`, `db/migrations/008_knowledge_sync.sql`, `manager/knowledge_sync_manager.py`, `local/knowledge_cache.py`, `local/learning_reporter.py`, `tests/test_knowledge_sync.py` (server: 39 tests), `local/tests/test_knowledge_sync.py` (33 tests)
+**Files modified:** `models/knowledge.py`, `models/__init__.py`, `db/client.py`, `api/routes.py`, `manager/room_registry.py`, `manager/__init__.py`, `local/room.py`, `local/api/routes.py`
+
+**Depends on:** Phase 5A (Knowledge File System), Phase 4A (Local Room), Phase 4C (Cross-Room)
 
 ### 5C: Four Interventions
 
@@ -866,6 +892,8 @@ Phase 4 (Local Room) ..................... DONE
   |
   v
 Phase 5 (Knowledge Layer) -- requires Phase 3
+  |  5A: Knowledge File System ............ DONE
+  |  5B: Knowledge Sync ................... DONE
   |
   v
 Phase 6 (Future)

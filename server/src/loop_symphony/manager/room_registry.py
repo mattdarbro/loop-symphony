@@ -44,6 +44,7 @@ class RoomHeartbeat(BaseModel):
     room_id: str
     status: str = "online"
     capabilities: list[str] | None = None
+    last_knowledge_version: int | None = None
 
 
 class RoomRegistry:

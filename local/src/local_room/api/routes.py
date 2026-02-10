@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from local_room.config import LocalRoomConfig
+from local_room.learning_reporter import LocalLearning
 from local_room.room import LocalRoom
 from local_room.router import RoutingDecision
 
@@ -46,6 +47,16 @@ class PrivacyCheckRequest(BaseModel):
 
     query: str
     context: dict[str, Any] | None = None
+
+
+class RecordLearningRequest(BaseModel):
+    """Request to manually record a learning."""
+
+    category: str
+    title: str
+    content: str
+    confidence: float = 0.5
+    tags: list[str] = Field(default_factory=list)
 
 
 class TaskResponse(BaseModel):
@@ -271,5 +282,69 @@ def create_app(config: LocalRoomConfig | None = None) -> FastAPI:
                 "should_stay_local": routing.privacy.should_stay_local if routing.privacy else False,
             },
         }
+
+    # =========================================================================
+    # Knowledge Sync (Phase 5B)
+    # =========================================================================
+
+    @app.get("/knowledge/cache")
+    async def knowledge_cache_stats():
+        """Get knowledge cache statistics."""
+        if not _room:
+            raise HTTPException(status_code=503, detail="Room not initialized")
+
+        return _room.knowledge_cache.stats()
+
+    @app.get("/knowledge/cache/entries")
+    async def knowledge_cache_entries(category: str | None = None):
+        """List cached knowledge entries.
+
+        Args:
+            category: Optional category filter
+        """
+        if not _room:
+            raise HTTPException(status_code=503, detail="Room not initialized")
+
+        entries = _room.knowledge_cache.get_entries(category=category)
+        return {"entries": [e.model_dump() for e in entries]}
+
+    @app.post("/knowledge/learnings/record")
+    async def record_learning(request: RecordLearningRequest):
+        """Manually record a learning observation."""
+        if not _room:
+            raise HTTPException(status_code=503, detail="Room not initialized")
+
+        learning = LocalLearning(
+            category=request.category,
+            title=request.title,
+            content=request.content,
+            confidence=request.confidence,
+            tags=request.tags,
+        )
+        _room.learning_reporter.record(learning)
+        return {
+            "recorded": True,
+            "pending": _room.learning_reporter.pending_count,
+        }
+
+    @app.post("/knowledge/learnings/flush")
+    async def flush_learnings():
+        """Force flush buffered learnings to the server."""
+        if not _room:
+            raise HTTPException(status_code=503, detail="Room not initialized")
+
+        count = await _room.learning_reporter.flush()
+        return {
+            "flushed": count,
+            "pending": _room.learning_reporter.pending_count,
+        }
+
+    @app.get("/knowledge/learnings/stats")
+    async def learning_stats():
+        """Get learning reporter statistics."""
+        if not _room:
+            raise HTTPException(status_code=503, detail="Room not initialized")
+
+        return _room.learning_reporter.stats()
 
     return app

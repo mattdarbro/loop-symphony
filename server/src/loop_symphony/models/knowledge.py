@@ -30,6 +30,8 @@ class KnowledgeSource(str, Enum):
     TRUST_TRACKER = "trust_tracker"
     MANUAL = "manual"
     SYSTEM = "system"
+    ROOM_LEARNING = "room_learning"
+    AGGREGATED = "aggregated"
 
 
 # Display titles for each category
@@ -51,6 +53,7 @@ class KnowledgeEntry(BaseModel):
     content: str
     source: KnowledgeSource = KnowledgeSource.SEED
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    version: int = 0
     user_id: str | None = None
     tags: list[str] = Field(default_factory=list)
     is_active: bool = True
