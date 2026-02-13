@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from loop_symphony.exceptions import DepthExceededError
 from loop_symphony.instruments.base import BaseInstrument, InstrumentResult
+from loop_symphony.instruments.falcon import FalconInstrument
 from loop_symphony.instruments.note import NoteInstrument
 from loop_symphony.instruments.research import ResearchInstrument
 from loop_symphony.instruments.synthesis import SynthesisInstrument
@@ -76,6 +77,7 @@ _INSTRUMENT_PROCESS_TYPE: dict[str, ProcessType] = {
     "research": ProcessType.SEMI_AUTONOMIC,
     "synthesis": ProcessType.SEMI_AUTONOMIC,
     "vision": ProcessType.SEMI_AUTONOMIC,
+    "falcon": ProcessType.SEMI_AUTONOMIC,
 }
 
 # Indicators that an attachment is an image
@@ -122,6 +124,7 @@ class Conductor:
                 "research": self._build_instrument("research"),
                 "synthesis": self._build_instrument("synthesis"),
                 "vision": self._build_instrument("vision"),
+                "falcon": FalconInstrument(),
             }
         else:
             self.instruments: dict[str, BaseInstrument] = {
@@ -129,6 +132,7 @@ class Conductor:
                 "research": ResearchInstrument(),
                 "synthesis": SynthesisInstrument(),
                 "vision": VisionInstrument(),
+                "falcon": FalconInstrument(),
             }
 
     def _get_planner(self) -> ArrangementPlanner:
@@ -306,6 +310,18 @@ class Conductor:
         if _has_image_attachments(request.context):
             logger.debug("Routing to vision: image attachments detected")
             return "vision"
+
+        # Check for falcon/execution keywords (before research check)
+        FALCON_KEYWORDS = [
+            "shell:", "claude:",
+            "on the falcon", "on falcon", "falcon ",
+            "check disk", "check memory", "system info",
+            "list files", "open browser", "browse to",
+        ]
+        for keyword in FALCON_KEYWORDS:
+            if keyword in query:
+                logger.debug(f"Routing to falcon: keyword '{keyword}' found")
+                return "falcon"
 
         # Check for research keywords
         for keyword in RESEARCH_KEYWORDS:
