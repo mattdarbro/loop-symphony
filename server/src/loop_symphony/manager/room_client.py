@@ -71,6 +71,7 @@ class RoomClient:
         }
         if request.context:
             payload["context"] = request.context.model_dump(
+                mode="json",
                 exclude={"checkpoint_fn", "spawn_fn"},
                 exclude_none=True,
             )
