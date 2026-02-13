@@ -1,61 +1,79 @@
-"""Falcon instrument - delegates execution to the Falcon Tower room.
+"""Falcon instrument - delegates execution tasks to the Falcon Tower room.
 
-This instrument doesn't execute locally. It exists so the Conductor's
-routing logic can identify tasks that need shell_execution capability
-and delegate them to the Falcon room via the room registry.
+This is a passthrough instrument. Unlike note/research/synthesis which
+execute locally on the server, the falcon instrument signals to the
+Conductor that this task should be delegated to the Falcon Tower room.
 
-If no Falcon room is registered, the instrument returns BOUNDED with
-a message explaining the capability is unavailable.
+The actual execution happens on the Falcon via the RoomClient delegation
+flow already built in Phase 4C.
 """
+
+import logging
 
 from loop_symphony.instruments.base import BaseInstrument, InstrumentResult
 from loop_symphony.models.finding import Finding
 from loop_symphony.models.outcome import Outcome
 from loop_symphony.models.task import TaskContext
 
+logger = logging.getLogger(__name__)
+
 
 class FalconInstrument(BaseInstrument):
-    """Instrument stub for Falcon Tower delegation.
+    """Falcon instrument for tasks requiring local machine execution.
 
-    Required capability: shell_execution — only the Falcon room provides this.
-    The Conductor's _select_room() will match this capability to the Falcon
-    room and delegate via _delegate_to_room() before this execute() is called.
+    Routes to the Falcon Tower room for:
+    - Shell command execution
+    - File system operations
+    - Claude Code tasks
+    - Browser automation
+    - Long-running processes
 
-    If execute() IS called, it means no Falcon room was available, so we
-    return a BOUNDED result explaining the situation.
+    The Conductor's room selection logic will match this instrument's
+    required_capabilities to the Falcon room's advertised capabilities,
+    causing automatic delegation via RoomClient.
     """
 
     name = "falcon"
     max_iterations = 1
     required_capabilities = frozenset({"shell_execution"})
-    optional_capabilities = frozenset()
 
     async def execute(
         self,
         query: str,
         context: TaskContext | None = None,
     ) -> InstrumentResult:
-        """Fallback when Falcon room is not available.
+        """Fallback execution if room delegation fails.
 
-        This only runs if room delegation was skipped or failed.
+        This should rarely be called directly — the Conductor will
+        normally delegate to the Falcon room via RoomClient before
+        reaching this method. This exists as a safety net.
+
+        Args:
+            query: The user's query
+            context: Optional task context
+
+        Returns:
+            InstrumentResult indicating delegation was expected
         """
+        logger.warning(
+            f"Falcon instrument execute() called directly for: {query[:50]}... "
+            "This means room delegation failed or was skipped."
+        )
+
         return InstrumentResult(
             outcome=Outcome.BOUNDED,
             findings=[
                 Finding(
-                    content="This task requires the Falcon Tower room for shell execution, "
-                    "but it is not currently available.",
-                    confidence=1.0,
+                    content="This task requires the Falcon Tower room but it appears to be offline or unreachable.",
                     source="falcon_instrument",
+                    confidence=0.3,
                 )
             ],
-            summary="The Falcon Tower room is required for this task but is not online. "
-            "Please ensure the Falcon room is registered and accessible.",
-            confidence=0.0,
+            summary="Falcon Tower room is not available. Please check that the Falcon is online and the tunnel is running.",
+            confidence=0.3,
             iterations=1,
-            sources_consulted=[],
+            sources_consulted=["falcon_instrument"],
             suggested_followups=[
-                "Check if the Falcon Tower is running and registered",
-                "Try again when the Falcon room is online",
+                "[proactive] The Falcon Tower room may be offline. Check the room status at /rooms",
             ],
         )
