@@ -463,7 +463,12 @@ class TestConductorExecuteComposition:
         with patch("loop_symphony.manager.conductor.NoteInstrument"), \
              patch("loop_symphony.manager.conductor.ResearchInstrument"), \
              patch("loop_symphony.manager.conductor.SynthesisInstrument"), \
-             patch("loop_symphony.manager.conductor.VisionInstrument"):
+             patch("loop_symphony.manager.conductor.VisionInstrument"), \
+             patch("loop_symphony.manager.conductor.IngestInstrument"), \
+             patch("loop_symphony.manager.conductor.DiagnoseInstrument"), \
+             patch("loop_symphony.manager.conductor.PrescribeInstrument"), \
+             patch("loop_symphony.manager.conductor.TrackInstrument"), \
+             patch("loop_symphony.manager.conductor.ReportInstrument"):
             conductor = Conductor()
 
         request = TaskRequest(query="Test")
@@ -485,7 +490,12 @@ class TestConductorExecuteComposition:
         with patch("loop_symphony.manager.conductor.NoteInstrument"), \
              patch("loop_symphony.manager.conductor.ResearchInstrument"), \
              patch("loop_symphony.manager.conductor.SynthesisInstrument"), \
-             patch("loop_symphony.manager.conductor.VisionInstrument"):
+             patch("loop_symphony.manager.conductor.VisionInstrument"), \
+             patch("loop_symphony.manager.conductor.IngestInstrument"), \
+             patch("loop_symphony.manager.conductor.DiagnoseInstrument"), \
+             patch("loop_symphony.manager.conductor.PrescribeInstrument"), \
+             patch("loop_symphony.manager.conductor.TrackInstrument"), \
+             patch("loop_symphony.manager.conductor.ReportInstrument"):
             conductor = Conductor()
 
         request = TaskRequest(query="Test")

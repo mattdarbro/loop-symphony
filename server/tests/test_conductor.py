@@ -13,7 +13,12 @@ def conductor():
     with patch("loop_symphony.manager.conductor.NoteInstrument") as mock_note, \
          patch("loop_symphony.manager.conductor.ResearchInstrument") as mock_research, \
          patch("loop_symphony.manager.conductor.SynthesisInstrument") as mock_synthesis, \
-         patch("loop_symphony.manager.conductor.VisionInstrument") as mock_vision:
+         patch("loop_symphony.manager.conductor.VisionInstrument") as mock_vision, \
+         patch("loop_symphony.manager.conductor.IngestInstrument"), \
+         patch("loop_symphony.manager.conductor.DiagnoseInstrument"), \
+         patch("loop_symphony.manager.conductor.PrescribeInstrument"), \
+         patch("loop_symphony.manager.conductor.TrackInstrument"), \
+         patch("loop_symphony.manager.conductor.ReportInstrument"):
 
         cond = Conductor()
         # Replace instruments with mocks

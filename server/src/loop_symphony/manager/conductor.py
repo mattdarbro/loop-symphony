@@ -10,6 +10,11 @@ from typing import TYPE_CHECKING
 from loop_symphony.exceptions import DepthExceededError
 from loop_symphony.instruments.base import BaseInstrument, InstrumentResult
 from loop_symphony.instruments.falcon import FalconInstrument
+from loop_symphony.instruments.magenta.diagnose import DiagnoseInstrument
+from loop_symphony.instruments.magenta.ingest import IngestInstrument
+from loop_symphony.instruments.magenta.prescribe import PrescribeInstrument
+from loop_symphony.instruments.magenta.report import ReportInstrument
+from loop_symphony.instruments.magenta.track import TrackInstrument
 from loop_symphony.instruments.note import NoteInstrument
 from loop_symphony.instruments.research import ResearchInstrument
 from loop_symphony.instruments.synthesis import SynthesisInstrument
@@ -71,6 +76,20 @@ COMPLEX_PATTERNS = [
     r"\badvantages\b.*\bdisadvantages\b",
 ]
 
+# Keywords that suggest magenta content analytics
+MAGENTA_KEYWORDS = [
+    "magenta",
+    "content analytics",
+    "youtube analytics",
+    "video performance",
+    "retention curve",
+    "content diagnosis",
+    "content report",
+    "creator analytics",
+    "video analytics",
+    "channel performance",
+]
+
 # Map instrument names to process visibility types
 _INSTRUMENT_PROCESS_TYPE: dict[str, ProcessType] = {
     "note": ProcessType.AUTONOMIC,
@@ -78,6 +97,11 @@ _INSTRUMENT_PROCESS_TYPE: dict[str, ProcessType] = {
     "synthesis": ProcessType.SEMI_AUTONOMIC,
     "vision": ProcessType.SEMI_AUTONOMIC,
     "falcon": ProcessType.SEMI_AUTONOMIC,
+    "magenta_ingest": ProcessType.CONSCIOUS,
+    "magenta_diagnose": ProcessType.CONSCIOUS,
+    "magenta_prescribe": ProcessType.CONSCIOUS,
+    "magenta_track": ProcessType.CONSCIOUS,
+    "magenta_report": ProcessType.CONSCIOUS,
 }
 
 # Indicators that an attachment is an image
@@ -125,6 +149,11 @@ class Conductor:
                 "synthesis": self._build_instrument("synthesis"),
                 "vision": self._build_instrument("vision"),
                 "falcon": FalconInstrument(),
+                "magenta_ingest": self._build_instrument("magenta_ingest"),
+                "magenta_diagnose": self._build_instrument("magenta_diagnose"),
+                "magenta_prescribe": self._build_instrument("magenta_prescribe"),
+                "magenta_track": self._build_instrument("magenta_track"),
+                "magenta_report": self._build_instrument("magenta_report"),
             }
         else:
             self.instruments: dict[str, BaseInstrument] = {
@@ -133,6 +162,11 @@ class Conductor:
                 "synthesis": SynthesisInstrument(),
                 "vision": VisionInstrument(),
                 "falcon": FalconInstrument(),
+                "magenta_ingest": IngestInstrument(),
+                "magenta_diagnose": DiagnoseInstrument(),
+                "magenta_prescribe": PrescribeInstrument(),
+                "magenta_track": TrackInstrument(),
+                "magenta_report": ReportInstrument(),
             }
 
     def _get_planner(self) -> ArrangementPlanner:
@@ -287,6 +321,21 @@ class Conductor:
         elif name == "vision":
             tools = self.registry.resolve(VisionInstrument.required_capabilities)
             return VisionInstrument(claude=tools["reasoning"])
+        elif name == "magenta_ingest":
+            tools = self.registry.resolve(IngestInstrument.required_capabilities)
+            return IngestInstrument(claude=tools["reasoning"])
+        elif name == "magenta_diagnose":
+            tools = self.registry.resolve(DiagnoseInstrument.required_capabilities)
+            return DiagnoseInstrument(claude=tools["reasoning"])
+        elif name == "magenta_prescribe":
+            tools = self.registry.resolve(PrescribeInstrument.required_capabilities)
+            return PrescribeInstrument(claude=tools["reasoning"])
+        elif name == "magenta_track":
+            tools = self.registry.resolve(TrackInstrument.required_capabilities)
+            return TrackInstrument(claude=tools["reasoning"])
+        elif name == "magenta_report":
+            tools = self.registry.resolve(ReportInstrument.required_capabilities)
+            return ReportInstrument(claude=tools["reasoning"])
         raise ValueError(f"Unknown instrument: {name}")
 
     async def analyze_and_route(self, request: TaskRequest) -> str:
@@ -322,6 +371,12 @@ class Conductor:
             if keyword in query:
                 logger.debug(f"Routing to falcon: keyword '{keyword}' found")
                 return "falcon"
+
+        # Check for magenta/content analytics keywords
+        for keyword in MAGENTA_KEYWORDS:
+            if keyword in query:
+                logger.debug(f"Routing to magenta_ingest: keyword '{keyword}' found")
+                return "magenta_ingest"
 
         # Check for research keywords
         for keyword in RESEARCH_KEYWORDS:
@@ -400,6 +455,25 @@ class Conductor:
             discrepancy=result.discrepancy,
             suggested_followups=result.suggested_followups,
         )
+
+    async def execute_magenta(self, request: TaskRequest) -> TaskResponse:
+        """Execute the full Magenta Loop pipeline.
+
+        Convenience method that creates the 5-stage composition and
+        executes it via execute_composition.
+
+        Args:
+            request: The task request (analytics data in context.input_results)
+
+        Returns:
+            TaskResponse with the final report
+        """
+        from loop_symphony.instruments.magenta.composition import (
+            create_magenta_composition,
+        )
+
+        composition = create_magenta_composition()
+        return await self.execute_composition(composition, request)
 
     async def execute(self, request: TaskRequest) -> TaskResponse:
         """Execute a task request end-to-end.

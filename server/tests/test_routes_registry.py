@@ -33,6 +33,11 @@ class _MockContext:
         self._research_patch = patch("loop_symphony.manager.conductor.ResearchInstrument")
         self._synthesis_patch = patch("loop_symphony.manager.conductor.SynthesisInstrument")
         self._vision_patch = patch("loop_symphony.manager.conductor.VisionInstrument")
+        self._ingest_patch = patch("loop_symphony.manager.conductor.IngestInstrument")
+        self._diagnose_patch = patch("loop_symphony.manager.conductor.DiagnoseInstrument")
+        self._prescribe_patch = patch("loop_symphony.manager.conductor.PrescribeInstrument")
+        self._track_patch = patch("loop_symphony.manager.conductor.TrackInstrument")
+        self._report_patch = patch("loop_symphony.manager.conductor.ReportInstrument")
 
     def __enter__(self):
         self.claude_cls = self._claude_patch.start()
@@ -41,6 +46,11 @@ class _MockContext:
         self.research_cls = self._research_patch.start()
         self.synthesis_cls = self._synthesis_patch.start()
         self.vision_cls = self._vision_patch.start()
+        self.ingest_cls = self._ingest_patch.start()
+        self.diagnose_cls = self._diagnose_patch.start()
+        self.prescribe_cls = self._prescribe_patch.start()
+        self.track_cls = self._track_patch.start()
+        self.report_cls = self._report_patch.start()
 
         # Mock tool instances with correct protocol attributes
         self.claude = MagicMock()
@@ -62,6 +72,11 @@ class _MockContext:
         self.synthesis_cls.optional_capabilities = frozenset()
         self.vision_cls.required_capabilities = frozenset({"reasoning", "vision"})
         self.vision_cls.optional_capabilities = frozenset()
+        self.ingest_cls.required_capabilities = frozenset({"reasoning"})
+        self.diagnose_cls.required_capabilities = frozenset({"reasoning"})
+        self.prescribe_cls.required_capabilities = frozenset({"reasoning"})
+        self.track_cls.required_capabilities = frozenset({"reasoning"})
+        self.report_cls.required_capabilities = frozenset({"reasoning"})
 
         return self
 
@@ -72,6 +87,11 @@ class _MockContext:
         self._research_patch.stop()
         self._synthesis_patch.stop()
         self._vision_patch.stop()
+        self._ingest_patch.stop()
+        self._diagnose_patch.stop()
+        self._prescribe_patch.stop()
+        self._track_patch.stop()
+        self._report_patch.stop()
 
 
 # ---------------------------------------------------------------------------

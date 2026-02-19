@@ -56,6 +56,11 @@ def _patch_instrument_classes():
     research_patch = patch("loop_symphony.manager.conductor.ResearchInstrument")
     synthesis_patch = patch("loop_symphony.manager.conductor.SynthesisInstrument")
     vision_patch = patch("loop_symphony.manager.conductor.VisionInstrument")
+    ingest_patch = patch("loop_symphony.manager.conductor.IngestInstrument")
+    diagnose_patch = patch("loop_symphony.manager.conductor.DiagnoseInstrument")
+    prescribe_patch = patch("loop_symphony.manager.conductor.PrescribeInstrument")
+    track_patch = patch("loop_symphony.manager.conductor.TrackInstrument")
+    report_patch = patch("loop_symphony.manager.conductor.ReportInstrument")
 
     class _Ctx:
         """Context manager that yields (mock_note_cls, mock_research_cls)."""
@@ -65,6 +70,11 @@ def _patch_instrument_classes():
             self.mock_research = research_patch.start()
             self.mock_synthesis = synthesis_patch.start()
             self.mock_vision = vision_patch.start()
+            self.mock_ingest = ingest_patch.start()
+            self.mock_diagnose = diagnose_patch.start()
+            self.mock_prescribe = prescribe_patch.start()
+            self.mock_track = track_patch.start()
+            self.mock_report = report_patch.start()
             # Restore real capability class attributes on the mocks
             self.mock_note.required_capabilities = frozenset({"reasoning"})
             self.mock_note.optional_capabilities = frozenset()
@@ -74,6 +84,11 @@ def _patch_instrument_classes():
             self.mock_synthesis.optional_capabilities = frozenset()
             self.mock_vision.required_capabilities = frozenset({"reasoning", "vision"})
             self.mock_vision.optional_capabilities = frozenset()
+            self.mock_ingest.required_capabilities = frozenset({"reasoning"})
+            self.mock_diagnose.required_capabilities = frozenset({"reasoning"})
+            self.mock_prescribe.required_capabilities = frozenset({"reasoning"})
+            self.mock_track.required_capabilities = frozenset({"reasoning"})
+            self.mock_report.required_capabilities = frozenset({"reasoning"})
             return self.mock_note, self.mock_research
 
         def __exit__(self, *args):
@@ -81,6 +96,11 @@ def _patch_instrument_classes():
             research_patch.stop()
             synthesis_patch.stop()
             vision_patch.stop()
+            ingest_patch.stop()
+            diagnose_patch.stop()
+            prescribe_patch.stop()
+            track_patch.stop()
+            report_patch.stop()
 
     return _Ctx()
 
@@ -171,7 +191,12 @@ class TestConductorBackwardCompat:
         with patch("loop_symphony.manager.conductor.NoteInstrument"), \
              patch("loop_symphony.manager.conductor.ResearchInstrument"), \
              patch("loop_symphony.manager.conductor.SynthesisInstrument"), \
-             patch("loop_symphony.manager.conductor.VisionInstrument"):
+             patch("loop_symphony.manager.conductor.VisionInstrument"), \
+             patch("loop_symphony.manager.conductor.IngestInstrument"), \
+             patch("loop_symphony.manager.conductor.DiagnoseInstrument"), \
+             patch("loop_symphony.manager.conductor.PrescribeInstrument"), \
+             patch("loop_symphony.manager.conductor.TrackInstrument"), \
+             patch("loop_symphony.manager.conductor.ReportInstrument"):
             conductor = Conductor()
             assert conductor.registry is None
 
@@ -180,7 +205,12 @@ class TestConductorBackwardCompat:
         with patch("loop_symphony.manager.conductor.NoteInstrument"), \
              patch("loop_symphony.manager.conductor.ResearchInstrument"), \
              patch("loop_symphony.manager.conductor.SynthesisInstrument"), \
-             patch("loop_symphony.manager.conductor.VisionInstrument"):
+             patch("loop_symphony.manager.conductor.VisionInstrument"), \
+             patch("loop_symphony.manager.conductor.IngestInstrument"), \
+             patch("loop_symphony.manager.conductor.DiagnoseInstrument"), \
+             patch("loop_symphony.manager.conductor.PrescribeInstrument"), \
+             patch("loop_symphony.manager.conductor.TrackInstrument"), \
+             patch("loop_symphony.manager.conductor.ReportInstrument"):
             conductor = Conductor()
             assert "note" in conductor.instruments
             assert "research" in conductor.instruments
@@ -201,7 +231,12 @@ class TestConductorBackwardCompat:
         with patch("loop_symphony.manager.conductor.NoteInstrument") as mock_note, \
              patch("loop_symphony.manager.conductor.ResearchInstrument"), \
              patch("loop_symphony.manager.conductor.SynthesisInstrument"), \
-             patch("loop_symphony.manager.conductor.VisionInstrument"):
+             patch("loop_symphony.manager.conductor.VisionInstrument"), \
+             patch("loop_symphony.manager.conductor.IngestInstrument"), \
+             patch("loop_symphony.manager.conductor.DiagnoseInstrument"), \
+             patch("loop_symphony.manager.conductor.PrescribeInstrument"), \
+             patch("loop_symphony.manager.conductor.TrackInstrument"), \
+             patch("loop_symphony.manager.conductor.ReportInstrument"):
             mock_note.return_value.execute = AsyncMock(return_value=mock_result)
             conductor = Conductor()
 

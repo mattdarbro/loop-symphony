@@ -35,6 +35,11 @@ def _patch_instruments():
         ResearchInstrument=MagicMock,
         SynthesisInstrument=MagicMock,
         VisionInstrument=MagicMock,
+        IngestInstrument=MagicMock,
+        DiagnoseInstrument=MagicMock,
+        PrescribeInstrument=MagicMock,
+        TrackInstrument=MagicMock,
+        ReportInstrument=MagicMock,
     )
 
 

@@ -953,6 +953,246 @@ class DatabaseClient:
         return len(result.data)
 
     # -------------------------------------------------------------------------
+    # Magenta: Content Analytics
+    # -------------------------------------------------------------------------
+
+    async def upsert_content_performance(
+        self,
+        data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Upsert a content performance record.
+
+        Args:
+            data: Content performance data dict
+
+        Returns:
+            The upserted record
+        """
+        data["updated_at"] = datetime.now(UTC).isoformat()
+        result = (
+            self.client.table("content_performance")
+            .upsert(data, on_conflict="app_id,content_id,platform")
+            .execute()
+        )
+        return result.data[0] if result.data else data
+
+    async def list_creator_content(
+        self,
+        creator_id: str,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """List recent content for a creator.
+
+        Args:
+            creator_id: The creator identifier
+            limit: Max records to return
+
+        Returns:
+            List of content performance records
+        """
+        result = (
+            self.client.table("content_performance")
+            .select("*")
+            .eq("creator_id", creator_id)
+            .eq("is_active", True)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return result.data
+
+    async def get_top_performing_content(
+        self,
+        creator_id: str,
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Get top performing content by views for a creator.
+
+        Args:
+            creator_id: The creator identifier
+            limit: Max records to return
+
+        Returns:
+            List of top content performance records
+        """
+        result = (
+            self.client.table("content_performance")
+            .select("*")
+            .eq("creator_id", creator_id)
+            .eq("is_active", True)
+            .order("views", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return result.data
+
+    async def get_benchmarks(
+        self,
+        platform: str,
+        category: str,
+        subscriber_tier: str,
+    ) -> dict[str, Any] | None:
+        """Get benchmarks for a platform/category/tier.
+
+        Args:
+            platform: Platform name
+            category: Content category
+            subscriber_tier: Subscriber tier string
+
+        Returns:
+            Benchmark record or None
+        """
+        result = (
+            self.client.table("content_benchmarks")
+            .select("*")
+            .eq("platform", platform)
+            .eq("category", category)
+            .eq("subscriber_tier", subscriber_tier)
+            .eq("is_active", True)
+            .execute()
+        )
+        if result.data:
+            return result.data[0]
+        return None
+
+    async def create_prescription(
+        self,
+        data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Create a content prescription.
+
+        Args:
+            data: Prescription data dict
+
+        Returns:
+            The created record
+        """
+        result = (
+            self.client.table("content_prescriptions")
+            .insert(data)
+            .execute()
+        )
+        return result.data[0] if result.data else data
+
+    async def list_prescriptions(
+        self,
+        creator_id: str,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List prescriptions for a creator.
+
+        Args:
+            creator_id: The creator identifier
+            status: Optional status filter
+
+        Returns:
+            List of prescription records
+        """
+        query = (
+            self.client.table("content_prescriptions")
+            .select("*")
+            .eq("creator_id", creator_id)
+            .eq("is_active", True)
+        )
+        if status is not None:
+            query = query.eq("status", status)
+        result = query.order("created_at", desc=True).execute()
+        return result.data
+
+    async def update_prescription(
+        self,
+        prescription_id: str,
+        data: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Update a prescription.
+
+        Args:
+            prescription_id: The prescription UUID
+            data: Fields to update
+
+        Returns:
+            Updated record or None
+        """
+        data["updated_at"] = datetime.now(UTC).isoformat()
+        result = (
+            self.client.table("content_prescriptions")
+            .update(data)
+            .eq("id", prescription_id)
+            .execute()
+        )
+        if result.data:
+            return result.data[0]
+        return None
+
+    async def get_applied_prescriptions_with_followups(
+        self,
+        creator_id: str,
+    ) -> list[dict[str, Any]]:
+        """Get applied prescriptions that have followup content IDs.
+
+        Args:
+            creator_id: The creator identifier
+
+        Returns:
+            List of prescription records with followups
+        """
+        result = (
+            self.client.table("content_prescriptions")
+            .select("*")
+            .eq("creator_id", creator_id)
+            .eq("status", "applied")
+            .eq("is_active", True)
+            .not_.is_("followup_content_id", "null")
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return result.data
+
+    async def create_content_report(
+        self,
+        data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Create a content report.
+
+        Args:
+            data: Report data dict
+
+        Returns:
+            The created record
+        """
+        result = (
+            self.client.table("content_reports")
+            .insert(data)
+            .execute()
+        )
+        return result.data[0] if result.data else data
+
+    async def list_content_reports(
+        self,
+        creator_id: str,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """List reports for a creator.
+
+        Args:
+            creator_id: The creator identifier
+            limit: Max records to return
+
+        Returns:
+            List of report records
+        """
+        result = (
+            self.client.table("content_reports")
+            .select("*")
+            .eq("creator_id", creator_id)
+            .eq("is_active", True)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return result.data
+
+    # -------------------------------------------------------------------------
     # Health Check
     # -------------------------------------------------------------------------
 

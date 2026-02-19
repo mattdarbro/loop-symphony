@@ -32,6 +32,7 @@ class KnowledgeSource(str, Enum):
     SYSTEM = "system"
     ROOM_LEARNING = "room_learning"
     AGGREGATED = "aggregated"
+    MAGENTA_TRACKER = "magenta_tracker"
 
 
 # Display titles for each category

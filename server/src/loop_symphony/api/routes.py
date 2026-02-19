@@ -7,6 +7,7 @@ from typing import Annotated, AsyncIterator
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
 from loop_symphony import __version__
@@ -1870,3 +1871,88 @@ async def evaluate_interventions(
         "interventions": [i.model_dump() for i in result.interventions],
         "count": len(result.interventions),
     }
+
+
+# ---------------------------------------------------------------------------
+# Magenta: Content Analytics
+# ---------------------------------------------------------------------------
+
+
+class MagentaAnalyzeRequest(BaseModel):
+    """Request body for magenta analysis."""
+
+    content_id: str
+    creator_id: str
+    analytics_data: dict
+
+
+class MagentaPrescriptionUpdate(BaseModel):
+    """Request body for updating a prescription status."""
+
+    status: str  # "applied", "skipped"
+    followup_content_id: str | None = None
+
+
+@router.post("/v1/magenta/analyze")
+async def magenta_analyze(
+    request: MagentaAnalyzeRequest,
+    conductor: Annotated[Conductor, Depends(get_conductor)],
+    auth: OptionalAuth = None,
+) -> dict:
+    """Run the full Magenta Loop on content analytics data.
+
+    Accepts content_id, creator_id, and raw analytics_data.
+    Returns the final report from the 5-stage pipeline.
+    """
+    app_id = str(auth.app.id) if auth else None
+    user_id = str(auth.user.id) if auth and auth.user else None
+
+    task_request = TaskRequest(
+        query=f"Magenta analysis for content {request.content_id}",
+        context=TaskContext(
+            app_id=app_id,
+            user_id=user_id,
+            input_results=[{
+                "analytics": {
+                    "content_id": request.content_id,
+                    "creator_id": request.creator_id,
+                    **request.analytics_data,
+                }
+            }],
+        ),
+    )
+
+    response = await conductor.execute_magenta(task_request)
+    return response.model_dump(mode="json")
+
+
+@router.get("/v1/magenta/reports/{creator_id}")
+async def magenta_reports(
+    creator_id: str,
+    db: Annotated[DatabaseClient, Depends(get_db_client)],
+    auth: OptionalAuth = None,
+) -> list[dict]:
+    """Fetch past Magenta reports for a creator."""
+    reports = await db.list_content_reports(creator_id)
+    return reports
+
+
+@router.patch("/v1/magenta/prescriptions/{prescription_id}")
+async def magenta_update_prescription(
+    prescription_id: str,
+    body: MagentaPrescriptionUpdate,
+    db: Annotated[DatabaseClient, Depends(get_db_client)],
+    auth: OptionalAuth = None,
+) -> dict:
+    """Update a prescription status (e.g. mark as applied with followup)."""
+    update_data: dict = {"status": body.status}
+    if body.followup_content_id:
+        update_data["followup_content_id"] = body.followup_content_id
+
+    result = await db.update_prescription(prescription_id, update_data)
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Prescription {prescription_id} not found",
+        )
+    return result
