@@ -20,7 +20,8 @@ from loop_symphony.api.events import (
     EventBus,
 )
 from loop_symphony.db.client import DatabaseClient
-from loop_symphony.manager.conductor import Conductor
+from conductors.reference.general_conductor import GeneralConductor
+from loop_symphony.manager.conductor import Conductor as LegacyConductor
 from loop_symphony.manager.heartbeat_worker import HeartbeatWorker
 from loop_symphony.models.arrangement import ArrangementProposal, ArrangementValidation
 from loop_symphony.models.heartbeat import Heartbeat, HeartbeatCreate, HeartbeatUpdate
@@ -73,7 +74,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Dependency injection
-_conductor: Conductor | None = None
+_conductor: GeneralConductor | None = None
 _registry: ToolRegistry | None = None
 _db_client: DatabaseClient | None = None
 _event_bus: EventBus | None = None
@@ -94,19 +95,26 @@ def _build_registry() -> ToolRegistry:
     return registry
 
 
-def get_conductor() -> Conductor:
+def get_conductor() -> GeneralConductor:
     """Get or create conductor instance."""
     global _conductor, _registry
     if _conductor is None:
         _registry = _build_registry()
-        room_registry = get_room_registry()
-        # Register the server itself so it competes in room scoring
-        room_registry.register_server(
-            capabilities={"reasoning", "synthesis", "analysis", "vision", "web_search"},
-            instruments=["note", "research", "synthesis", "vision"],
-        )
-        _conductor = Conductor(registry=_registry, room_registry=room_registry)
+        _conductor = GeneralConductor(registry=_registry)
     return _conductor
+
+
+_legacy_conductor: LegacyConductor | None = None
+
+
+def get_legacy_conductor() -> LegacyConductor:
+    """Get or create legacy conductor for arrangement/loop/magenta endpoints."""
+    global _legacy_conductor, _registry
+    if _legacy_conductor is None:
+        if _registry is None:
+            _registry = _build_registry()
+        _legacy_conductor = LegacyConductor(registry=_registry)
+    return _legacy_conductor
 
 
 def get_db_client() -> DatabaseClient:
@@ -200,7 +208,7 @@ def get_knowledge_sync_manager() -> KnowledgeSyncManager:
 
 async def execute_task_background(
     request: TaskRequest,
-    conductor: Conductor,
+    conductor: GeneralConductor,
     db: DatabaseClient,
     event_bus: EventBus,
 ) -> None:
@@ -248,7 +256,7 @@ async def execute_task_background(
         request.context = context.model_copy(update={"checkpoint_fn": _checkpoint})
 
         # Execute the task
-        response = await conductor.execute(request)
+        response = await conductor.handle(request)
 
         # Post-task interventions (fail-open)
         try:
@@ -363,7 +371,7 @@ _INSTRUMENT_ITERATIONS = {
 async def submit_task(
     request: TaskRequest,
     background_tasks: BackgroundTasks,
-    conductor: Annotated[Conductor, Depends(get_conductor)],
+    conductor: Annotated[GeneralConductor, Depends(get_conductor)],
     db: Annotated[DatabaseClient, Depends(get_db_client)],
     event_bus: Annotated[EventBus, Depends(get_event_bus)],
     auth: OptionalAuth = None,
@@ -413,9 +421,9 @@ async def submit_task(
         trust_level = request.preferences.trust_level
 
     # Analyze which instrument would be used
-    instrument_name = await conductor.analyze_and_route(request)
+    instrument_name = await conductor.route(request)
     process_type = ProcessType.SEMI_AUTONOMIC
-    from loop_symphony.manager.conductor import _INSTRUMENT_PROCESS_TYPE
+    from conductors.reference.general_conductor import _INSTRUMENT_PROCESS_TYPE
     if instrument_name in _INSTRUMENT_PROCESS_TYPE:
         process_type = _INSTRUMENT_PROCESS_TYPE[instrument_name]
 
@@ -483,7 +491,7 @@ async def submit_task(
 @router.post("/task/{task_id}/approve", response_model=TaskSubmitResponse)
 async def approve_task(
     task_id: str,
-    conductor: Annotated[Conductor, Depends(get_conductor)],
+    conductor: Annotated[GeneralConductor, Depends(get_conductor)],
     db: Annotated[DatabaseClient, Depends(get_db_client)],
     event_bus: Annotated[EventBus, Depends(get_event_bus)],
 ) -> TaskSubmitResponse:
@@ -522,7 +530,7 @@ async def approve_task(
     await db.update_task_status(task_id, TaskStatus.PENDING)
 
     # Determine instrument for tracking
-    instrument_name = await conductor.analyze_and_route(request)
+    instrument_name = await conductor.route(request)
 
     # Register with task manager
     task_manager = get_task_manager()
@@ -562,7 +570,7 @@ async def approve_task(
 @router.post("/task/plan", response_model=ArrangementProposal)
 async def plan_arrangement(
     request: TaskRequest,
-    conductor: Annotated[Conductor, Depends(get_conductor)],
+    conductor: Annotated[LegacyConductor, Depends(get_legacy_conductor)],
 ) -> ArrangementProposal:
     """Plan a novel arrangement for a task without executing.
 
@@ -584,7 +592,7 @@ async def plan_arrangement(
 @router.post("/task/plan/validate", response_model=ArrangementValidation)
 async def validate_arrangement(
     proposal: ArrangementProposal,
-    conductor: Annotated[Conductor, Depends(get_conductor)],
+    conductor: Annotated[LegacyConductor, Depends(get_legacy_conductor)],
 ) -> ArrangementValidation:
     """Validate an arrangement proposal.
 
@@ -605,7 +613,7 @@ async def validate_arrangement(
 async def submit_novel_task(
     request: TaskRequest,
     background_tasks: BackgroundTasks,
-    conductor: Annotated[Conductor, Depends(get_conductor)],
+    conductor: Annotated[LegacyConductor, Depends(get_legacy_conductor)],
     db: Annotated[DatabaseClient, Depends(get_db_client)],
     event_bus: Annotated[EventBus, Depends(get_event_bus)],
     auth: OptionalAuth = None,
@@ -690,7 +698,7 @@ async def submit_novel_task(
 @router.post("/task/loop/propose", response_model=LoopProposal)
 async def propose_loop(
     request: TaskRequest,
-    conductor: Annotated[Conductor, Depends(get_conductor)],
+    conductor: Annotated[LegacyConductor, Depends(get_legacy_conductor)],
 ) -> LoopProposal:
     """Propose a new loop type for a task without executing.
 
@@ -712,7 +720,7 @@ async def propose_loop(
 @router.post("/task/loop/validate", response_model=LoopProposalValidation)
 async def validate_loop_proposal(
     proposal: LoopProposal,
-    conductor: Annotated[Conductor, Depends(get_conductor)],
+    conductor: Annotated[LegacyConductor, Depends(get_legacy_conductor)],
 ) -> LoopProposalValidation:
     """Validate a loop proposal.
 
@@ -733,7 +741,7 @@ async def validate_loop_proposal(
 @router.post("/task/loop/plan", response_model=LoopExecutionPlan)
 async def get_loop_plan(
     proposal: LoopProposal,
-    conductor: Annotated[Conductor, Depends(get_conductor)],
+    conductor: Annotated[LegacyConductor, Depends(get_legacy_conductor)],
 ) -> LoopExecutionPlan:
     """Get an execution plan for a loop proposal.
 
@@ -755,7 +763,7 @@ async def get_loop_plan(
 async def submit_loop_task(
     request: TaskRequest,
     background_tasks: BackgroundTasks,
-    conductor: Annotated[Conductor, Depends(get_conductor)],
+    conductor: Annotated[LegacyConductor, Depends(get_legacy_conductor)],
     db: Annotated[DatabaseClient, Depends(get_db_client)],
     event_bus: Annotated[EventBus, Depends(get_event_bus)],
     auth: OptionalAuth = None,
@@ -839,7 +847,7 @@ async def submit_loop_task(
 
 @router.get("/arrangements", response_model=list[SavedArrangement])
 async def list_saved_arrangements(
-    conductor: Annotated[Conductor, Depends(get_conductor)],
+    conductor: Annotated[LegacyConductor, Depends(get_legacy_conductor)],
     auth: OptionalAuth = None,
 ) -> list[SavedArrangement]:
     """List all saved arrangements.
@@ -860,7 +868,7 @@ async def list_saved_arrangements(
 @router.post("/arrangements", response_model=SavedArrangement)
 async def save_arrangement(
     request: SaveArrangementRequest,
-    conductor: Annotated[Conductor, Depends(get_conductor)],
+    conductor: Annotated[LegacyConductor, Depends(get_legacy_conductor)],
     auth: OptionalAuth = None,
 ) -> SavedArrangement:
     """Save an arrangement for future reuse.
@@ -892,7 +900,7 @@ async def save_arrangement(
 @router.get("/arrangements/{arrangement_id}", response_model=SavedArrangement)
 async def get_saved_arrangement(
     arrangement_id: str,
-    conductor: Annotated[Conductor, Depends(get_conductor)],
+    conductor: Annotated[LegacyConductor, Depends(get_legacy_conductor)],
 ) -> SavedArrangement:
     """Get a saved arrangement by ID.
 
@@ -918,7 +926,7 @@ async def get_saved_arrangement(
 @router.delete("/arrangements/{arrangement_id}")
 async def delete_saved_arrangement(
     arrangement_id: str,
-    conductor: Annotated[Conductor, Depends(get_conductor)],
+    conductor: Annotated[LegacyConductor, Depends(get_legacy_conductor)],
 ) -> dict[str, str]:
     """Delete a saved arrangement.
 
@@ -943,7 +951,7 @@ async def delete_saved_arrangement(
 
 @router.get("/arrangements/suggestion", response_model=ArrangementSuggestion | None)
 async def get_arrangement_suggestion(
-    conductor: Annotated[Conductor, Depends(get_conductor)],
+    conductor: Annotated[LegacyConductor, Depends(get_legacy_conductor)],
     arrangement_type: str = "composition",
 ) -> ArrangementSuggestion | None:
     """Get a suggestion for saving a high-performing arrangement.
@@ -970,7 +978,7 @@ async def save_arrangement_from_task(
     name: str,
     description: str,
     db: Annotated[DatabaseClient, Depends(get_db_client)],
-    conductor: Annotated[Conductor, Depends(get_conductor)],
+    conductor: Annotated[LegacyConductor, Depends(get_legacy_conductor)],
     auth: OptionalAuth = None,
 ) -> SavedArrangement:
     """Save the arrangement used for a successful task.
@@ -1896,7 +1904,7 @@ class MagentaPrescriptionUpdate(BaseModel):
 @router.post("/v1/magenta/analyze")
 async def magenta_analyze(
     request: MagentaAnalyzeRequest,
-    conductor: Annotated[Conductor, Depends(get_conductor)],
+    conductor: Annotated[LegacyConductor, Depends(get_legacy_conductor)],
     auth: OptionalAuth = None,
 ) -> dict:
     """Run the full Magenta Loop on content analytics data.
