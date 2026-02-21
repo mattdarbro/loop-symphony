@@ -13,10 +13,10 @@ dependencies = [
     "supabase>=2.3.0",
     "python-dotenv>=1.0.0",
     "croniter>=2.0.0",
-    "loop-library @ file:///${PROJECT_ROOT}/../loop_library",
-    "librarian @ file:///${PROJECT_ROOT}/../librarian",
-    "conductors @ file:///${PROJECT_ROOT}/../conductors",
-    "dispatch-client @ file:///${PROJECT_ROOT}/../dispatch_client",
+    "loop-library",
+    "librarian",
+    "conductors",
+    "dispatch-client",
 ]
 
 [project.optional-dependencies]
