@@ -2,13 +2,21 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copy local packages first (server depends on these)
-COPY loop_library/ /packages/loop_library/
-COPY librarian/ /packages/librarian/
-COPY conductors/ /packages/conductors/
-COPY dispatch_client/ /packages/dispatch_client/
+# Copy local packages with proper structure for hatchling
+# Each package expects: pyproject.toml at root + source in a subdirectory matching packages=["<name>"]
+COPY loop_library/pyproject.toml /packages/loop_library/pyproject.toml
+COPY loop_library/ /packages/loop_library/loop_library/
 
-# Install local packages
+COPY dispatch_client/pyproject.toml /packages/dispatch_client/pyproject.toml
+COPY dispatch_client/ /packages/dispatch_client/dispatch_client/
+
+COPY conductors/pyproject.toml /packages/conductors/pyproject.toml
+COPY conductors/ /packages/conductors/conductors/
+
+COPY librarian/pyproject.toml /packages/librarian/pyproject.toml
+COPY librarian/ /packages/librarian/librarian/
+
+# Install local packages (order: deps first)
 RUN pip install --no-cache-dir \
     /packages/loop_library \
     /packages/dispatch_client \
