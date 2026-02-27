@@ -189,7 +189,7 @@ def get_knowledge_manager() -> KnowledgeManager:
         _knowledge_manager = KnowledgeManager(
             db=get_db_client(),
             error_tracker=get_error_tracker(),
-            arrangement_tracker=get_conductor().tracker,
+            arrangement_tracker=getattr(get_conductor(), "tracker", None),
             trust_tracker=get_trust_tracker(),
         )
     return _knowledge_manager
