@@ -1230,3 +1230,94 @@ class DatabaseClient:
                 "latency_ms": round(latency_ms, 2),
                 "error": str(e),
             }
+
+    # ── Intelligence Artifacts ──────────────────────────────────────────
+
+    async def create_intelligence_artifact(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Create a new intelligence artifact row.
+
+        Args:
+            data: Dict with fields matching the intelligence_artifacts schema.
+
+        Returns:
+            The inserted row.
+        """
+        result = self.client.table("intelligence_artifacts").insert(data).execute()
+        logger.debug(f"Created intelligence artifact {data.get('id', '?')}")
+        return result.data[0] if result.data else {}
+
+    async def update_intelligence_artifact(
+        self, artifact_id: str, updates: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Update an intelligence artifact.
+
+        Args:
+            artifact_id: UUID string of the artifact.
+            updates: Fields to update.
+
+        Returns:
+            The updated row.
+        """
+        updates["updated_at"] = datetime.now(UTC).isoformat()
+        result = (
+            self.client.table("intelligence_artifacts")
+            .update(updates)
+            .eq("id", artifact_id)
+            .execute()
+        )
+        logger.debug(f"Updated intelligence artifact {artifact_id}")
+        return result.data[0] if result.data else {}
+
+    # ── Investigation Briefs ────────────────────────────────────────────
+
+    async def create_investigation_brief(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Create a new investigation brief row.
+
+        Args:
+            data: Dict with fields matching the investigation_briefs schema.
+
+        Returns:
+            The inserted row.
+        """
+        result = self.client.table("investigation_briefs").insert(data).execute()
+        logger.debug(f"Created investigation brief {data.get('id', '?')}")
+        return result.data[0] if result.data else {}
+
+    async def update_investigation_brief(
+        self, brief_id: str, updates: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Update an investigation brief.
+
+        Args:
+            brief_id: UUID string of the brief.
+            updates: Fields to update.
+
+        Returns:
+            The updated row.
+        """
+        updates["updated_at"] = datetime.now(UTC).isoformat()
+        result = (
+            self.client.table("investigation_briefs")
+            .update(updates)
+            .eq("id", brief_id)
+            .execute()
+        )
+        logger.debug(f"Updated investigation brief {brief_id}")
+        return result.data[0] if result.data else {}
+
+    async def get_investigation_brief(self, brief_id: str) -> dict[str, Any] | None:
+        """Get an investigation brief by ID.
+
+        Args:
+            brief_id: UUID string of the brief.
+
+        Returns:
+            The brief row or None.
+        """
+        result = (
+            self.client.table("investigation_briefs")
+            .select("*")
+            .eq("id", brief_id)
+            .execute()
+        )
+        return result.data[0] if result.data else None

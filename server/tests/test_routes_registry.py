@@ -29,15 +29,16 @@ class _MockContext:
     def __init__(self):
         self._claude_patch = patch("loop_symphony.api.routes.ClaudeClient")
         self._tavily_patch = patch("loop_symphony.api.routes.TavilyClient")
-        self._note_patch = patch("loop_symphony.manager.conductor.NoteInstrument")
-        self._research_patch = patch("loop_symphony.manager.conductor.ResearchInstrument")
-        self._synthesis_patch = patch("loop_symphony.manager.conductor.SynthesisInstrument")
-        self._vision_patch = patch("loop_symphony.manager.conductor.VisionInstrument")
-        self._ingest_patch = patch("loop_symphony.manager.conductor.IngestInstrument")
-        self._diagnose_patch = patch("loop_symphony.manager.conductor.DiagnoseInstrument")
-        self._prescribe_patch = patch("loop_symphony.manager.conductor.PrescribeInstrument")
-        self._track_patch = patch("loop_symphony.manager.conductor.TrackInstrument")
-        self._report_patch = patch("loop_symphony.manager.conductor.ReportInstrument")
+        # Patch where GeneralConductor imports instruments from
+        self._note_patch = patch("conductors.reference.general_conductor.NoteInstrument")
+        self._research_patch = patch("conductors.reference.general_conductor.ResearchInstrument")
+        self._synthesis_patch = patch("conductors.reference.general_conductor.SynthesisInstrument")
+        self._vision_patch = patch("conductors.reference.general_conductor.VisionInstrument")
+        self._ingest_patch = patch("conductors.reference.general_conductor.IngestInstrument")
+        self._diagnose_patch = patch("conductors.reference.general_conductor.DiagnoseInstrument")
+        self._prescribe_patch = patch("conductors.reference.general_conductor.PrescribeInstrument")
+        self._track_patch = patch("conductors.reference.general_conductor.TrackInstrument")
+        self._report_patch = patch("conductors.reference.general_conductor.ReportInstrument")
 
     def __enter__(self):
         self.claude_cls = self._claude_patch.start()

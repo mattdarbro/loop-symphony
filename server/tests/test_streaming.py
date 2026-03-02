@@ -416,7 +416,7 @@ class TestBackgroundTaskEmitsEvents:
 
         response = self._make_response()
         mock_conductor = MagicMock()
-        mock_conductor.execute = AsyncMock(return_value=response)
+        mock_conductor.handle = AsyncMock(return_value=response)
 
         bus = EventBus()
         request = TaskRequest(query="Test")
@@ -439,7 +439,7 @@ class TestBackgroundTaskEmitsEvents:
         mock_db.fail_task = AsyncMock()
 
         mock_conductor = MagicMock()
-        mock_conductor.execute = AsyncMock(side_effect=RuntimeError("Boom"))
+        mock_conductor.handle = AsyncMock(side_effect=RuntimeError("Boom"))
 
         bus = EventBus()
         request = TaskRequest(query="Test")
@@ -467,7 +467,7 @@ class TestBackgroundTaskEmitsEvents:
             return self._make_response()
 
         mock_conductor = MagicMock()
-        mock_conductor.execute = call_checkpoint
+        mock_conductor.handle = call_checkpoint
 
         bus = EventBus()
         request = TaskRequest(query="Test")
@@ -497,7 +497,7 @@ class TestBackgroundTaskEmitsEvents:
             return self._make_response()
 
         mock_conductor = MagicMock()
-        mock_conductor.execute = call_checkpoint
+        mock_conductor.handle = call_checkpoint
 
         bus = EventBus()
         request = TaskRequest(query="Test")

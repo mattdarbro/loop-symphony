@@ -65,9 +65,15 @@ from loop_symphony.models.knowledge_sync import (
     LearningAggregationResult,
     RoomLearningBatch,
 )
+from loop_symphony.models.investigation_brief import (
+    InvestigationBrief,
+    LibrarianExecuteRequest,
+    LibrarianPlan,
+)
 from loop_symphony.tools.claude import ClaudeClient
 from loop_symphony.tools.registry import ToolRegistry
 from loop_symphony.tools.tavily import TavilyClient
+from librarian.catalog.planner import ArrangementPlanner, INSTRUMENT_CATALOG
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +111,18 @@ def get_conductor() -> GeneralConductor:
 
 
 _legacy_conductor: LegacyConductor | None = None
+_arrangement_planner: ArrangementPlanner | None = None
+
+
+def get_arrangement_planner() -> ArrangementPlanner:
+    """Get or create arrangement planner instance."""
+    global _arrangement_planner, _registry
+    if _arrangement_planner is None:
+        if _registry is None:
+            _registry = _build_registry()
+        claude = _registry.get_by_capability("reasoning")
+        _arrangement_planner = ArrangementPlanner(claude=claude, registry=_registry)
+    return _arrangement_planner
 
 
 def get_legacy_conductor() -> LegacyConductor:
@@ -1964,3 +1982,275 @@ async def magenta_update_prescription(
             detail=f"Prescription {prescription_id} not found",
         )
     return result
+
+
+# ── Librarian Endpoints ────────────────────────────────────────────────
+
+
+@router.get("/librarian/catalog")
+async def librarian_catalog() -> dict:
+    """Return the full instrument catalog with metadata.
+
+    Includes executable status and conductor assignment for each instrument.
+    """
+    return INSTRUMENT_CATALOG
+
+
+@router.post("/librarian/plan")
+async def librarian_plan(
+    brief: InvestigationBrief,
+    planner: Annotated[ArrangementPlanner, Depends(get_arrangement_planner)],
+    db: Annotated[DatabaseClient, Depends(get_db_client)],
+) -> LibrarianPlan:
+    """Plan an investigation from a structured brief.
+
+    Saves the brief to the database, runs the Librarian planner,
+    and returns a LibrarianPlan with the proposed arrangement.
+    """
+    # Save the brief to Supabase
+    brief_row = await db.create_investigation_brief({
+        "deliverable": brief.deliverable,
+        "context": brief.context,
+        "proposed_approach": brief.proposed_approach,
+        "tools_and_data": brief.tools_and_data,
+        "exclusions": brief.exclusions,
+        "precision": brief.precision,
+        "intent": brief.intent,
+        "conductor_context": brief.conductor_context,
+        "plan_status": "planning",
+    })
+    brief_id = brief_row.get("id")
+
+    try:
+        plan = await planner.plan_from_brief(brief)
+
+        # Update brief with the generated plan
+        if brief_id:
+            await db.update_investigation_brief(brief_id, {
+                "librarian_plan": plan.model_dump(mode="json"),
+                "plan_status": "planned",
+            })
+
+        return plan
+    except Exception as e:
+        logger.error(f"Librarian planning failed: {e}")
+        if brief_id:
+            await db.update_investigation_brief(brief_id, {
+                "plan_status": "failed",
+            })
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Planning failed: {e}",
+        )
+
+
+@router.post("/librarian/execute")
+async def librarian_execute(
+    request: LibrarianExecuteRequest,
+    conductor: Annotated[GeneralConductor, Depends(get_conductor)],
+    db: Annotated[DatabaseClient, Depends(get_db_client)],
+    event_bus: Annotated[EventBus, Depends(get_event_bus)],
+    background_tasks: BackgroundTasks,
+) -> TaskSubmitResponse:
+    """Execute an approved Librarian plan.
+
+    Creates an intelligence artifact, builds a TaskRequest from the brief,
+    and runs the task in the background.
+    """
+    brief_id = request.brief_id
+    plan = request.plan
+
+    # Fetch the original brief from the database
+    brief_row = await db.get_investigation_brief(brief_id)
+    if brief_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Investigation brief {brief_id} not found",
+        )
+
+    deliverable = brief_row.get("deliverable", "")
+    intent = brief_row.get("intent")
+
+    # Determine conductor name from the plan
+    conductor_name = (
+        plan.conductors_involved[0] if plan.conductors_involved else "librarian"
+    )
+
+    # Determine loop names from the proposal steps/branches
+    loop_names: list[str] = []
+    if plan.proposal.steps:
+        loop_names = [s.instrument for s in plan.proposal.steps]
+    elif plan.proposal.branches:
+        loop_names = plan.proposal.branches
+    elif plan.proposal.instrument:
+        loop_names = [plan.proposal.instrument]
+
+    # Create intelligence artifact with status "running"
+    artifact_row = await db.create_intelligence_artifact({
+        "conductor_name": conductor_name,
+        "card_type": "investigation",
+        "headline": deliverable,
+        "reasoning_preview": plan.proposal.rationale,
+        "full_reasoning": {},
+        "symphony_name": f"{plan.proposal.type}_arrangement",
+        "loop_names": loop_names,
+        "trust_level": 1,
+        "confidence": None,
+        "data_sources": [],
+        "is_pinned": False,
+        "status": "running",
+        "brief_id": brief_id,
+    })
+    artifact_id = artifact_row.get("id")
+
+    # Link artifact back to the brief
+    await db.update_investigation_brief(brief_id, {
+        "artifact_id": artifact_id,
+        "plan_status": "running",
+    })
+
+    # Build a TaskRequest from the brief
+    task_request = TaskRequest(
+        query=deliverable,
+        context=TaskContext(
+            conversation_summary=brief_row.get("context"),
+        ),
+    )
+
+    # Register task with task manager
+    task_manager = get_task_manager()
+    await task_manager.register(task_request.id)
+
+    # Create task in database
+    await db.create_task(task_request)
+
+    # Execute in background
+    background_tasks.add_task(
+        _execute_librarian_task,
+        task_request=task_request,
+        conductor=conductor,
+        db=db,
+        event_bus=event_bus,
+        artifact_id=artifact_id,
+        brief_id=brief_id,
+        intent=intent,
+    )
+
+    return TaskSubmitResponse(
+        task_id=task_request.id,
+        status=TaskStatus.RUNNING.value,
+        message="Librarian investigation started",
+    )
+
+
+async def _execute_librarian_task(
+    task_request: TaskRequest,
+    conductor: GeneralConductor,
+    db: DatabaseClient,
+    event_bus: EventBus,
+    artifact_id: str,
+    brief_id: str,
+    intent: str | None,
+) -> None:
+    """Background execution for a librarian-initiated task.
+
+    Executes the task, then writes results to the intelligence_artifacts table.
+    """
+    task_id = task_request.id
+    task_manager = get_task_manager()
+
+    try:
+        await db.update_task_status(task_id, TaskStatus.RUNNING)
+        event_bus.emit(task_id, {"event": EVENT_STARTED})
+
+        async def _checkpoint(
+            iteration_num: int,
+            phase: str,
+            input_data: dict,
+            output_data: dict,
+            duration_ms: int,
+        ) -> None:
+            await db.record_iteration(
+                task_id, iteration_num, phase, input_data, output_data, duration_ms
+            )
+            await task_manager.update_progress(
+                task_id, iteration_num, f"Phase: {phase}"
+            )
+            event_bus.emit(task_id, {
+                "event": EVENT_ITERATION,
+                "iteration_num": iteration_num,
+                "phase": phase,
+                "data": output_data,
+                "duration_ms": duration_ms,
+            })
+
+        context = task_request.context or TaskContext()
+        task_request.context = context.model_copy(update={"checkpoint_fn": _checkpoint})
+
+        response = await conductor.handle(task_request)
+
+        # Complete the task in the database
+        await db.complete_task(task_id, response)
+        event_bus.emit(task_id, {
+            "event": EVENT_COMPLETE,
+            "outcome": response.outcome.value if response.outcome else "complete",
+        })
+
+        # Build the reasoning preview from the most interesting finding
+        reasoning_preview = ""
+        if response.findings:
+            reasoning_preview = response.findings[0].content[:500]
+        elif response.summary:
+            reasoning_preview = response.summary[:500]
+
+        # Frame conclusion around intent if provided
+        conclusion = response.summary or ""
+        if intent and conclusion:
+            conclusion = f"Regarding '{intent}': {conclusion}"
+
+        # Build full reasoning JSON
+        full_reasoning = {
+            "summary": response.summary,
+            "findings": [
+                {"content": f.content, "confidence": f.confidence}
+                for f in (response.findings or [])
+            ],
+            "metadata": response.metadata.model_dump(mode="json") if response.metadata else {},
+        }
+
+        # Update intelligence artifact to complete
+        await db.update_intelligence_artifact(artifact_id, {
+            "status": "complete",
+            "reasoning_preview": reasoning_preview,
+            "full_reasoning": full_reasoning,
+            "conclusion": conclusion,
+            "confidence": response.confidence,
+            "data_sources": (
+                response.metadata.sources_consulted if response.metadata else []
+            ),
+        })
+
+        # Update brief status
+        await db.update_investigation_brief(brief_id, {
+            "plan_status": "complete",
+        })
+
+    except Exception as e:
+        logger.error(f"Librarian task {task_id} failed: {e}")
+        await db.update_task_status(task_id, TaskStatus.FAILED, error=str(e))
+        event_bus.emit(task_id, {"event": EVENT_ERROR, "error": str(e)})
+
+        # Mark artifact as failed
+        try:
+            await db.update_intelligence_artifact(artifact_id, {
+                "status": "failed",
+                "full_reasoning": {"error": str(e)},
+            })
+            await db.update_investigation_brief(brief_id, {
+                "plan_status": "failed",
+            })
+        except Exception:
+            logger.error(f"Failed to update artifact/brief status for task {task_id}")
+
+    finally:
+        task_manager.deregister(task_id)

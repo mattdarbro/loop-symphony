@@ -183,7 +183,7 @@ class TestCheckpointWiring:
                 ),
             )
 
-        mock_conductor.execute = capture_execute
+        mock_conductor.handle = capture_execute
 
         request = TaskRequest(query="Test")
         from loop_symphony.api.events import EventBus
@@ -203,7 +203,7 @@ class TestCheckpointWiring:
         mock_db.complete_task = AsyncMock()
         mock_db.record_iteration = AsyncMock()
 
-        # When conductor.execute is called, invoke the checkpoint_fn
+        # When conductor.handle is called, invoke the checkpoint_fn
         async def call_checkpoint(request):
             fn = request.context.checkpoint_fn
             await fn(1, "iteration", {"q": "test"}, {"c": 0.8}, 100)
@@ -226,7 +226,7 @@ class TestCheckpointWiring:
             )
 
         mock_conductor = MagicMock()
-        mock_conductor.execute = call_checkpoint
+        mock_conductor.handle = call_checkpoint
 
         request = TaskRequest(query="Test")
         from loop_symphony.api.events import EventBus
@@ -268,7 +268,7 @@ class TestCheckpointWiring:
             )
 
         mock_conductor = MagicMock()
-        mock_conductor.execute = capture_execute
+        mock_conductor.handle = capture_execute
 
         request = TaskRequest(query="Test", context=None)
         from loop_symphony.api.events import EventBus
