@@ -1,4 +1,4 @@
-"""Heartbeat worker - processes due heartbeats."""
+"""Heartbeat worker - processes due heartbeats via the Librarian pipeline."""
 
 import logging
 from datetime import datetime, UTC, timedelta
@@ -7,55 +7,56 @@ from typing import Any
 import httpx
 from croniter import croniter
 
+from conductors.reference.general_conductor import GeneralConductor
+from librarian.catalog.planner import ArrangementPlanner
 from loop_symphony.db.client import DatabaseClient
-from loop_symphony.manager.conductor import Conductor
+from loop_symphony.models.finding import ExecutionMetadata, Finding
 from loop_symphony.models.heartbeat import Heartbeat, HeartbeatStatus
-from loop_symphony.models.task import TaskContext, TaskRequest, TaskResponse
+from loop_symphony.models.task import (
+    TaskContext,
+    TaskPreferences,
+    TaskRequest,
+    TaskResponse,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class HeartbeatWorker:
-    """Processes due heartbeats and executes their tasks."""
+    """Processes due heartbeats using the Librarian pipeline.
+
+    Flow: expand query template → Librarian plans instrument →
+    execute instrument directly → store result → call webhook.
+    """
 
     def __init__(
         self,
         db: DatabaseClient,
-        conductor: Conductor,
+        conductor: GeneralConductor,
+        planner: ArrangementPlanner | None = None,
     ) -> None:
         self.db = db
         self.conductor = conductor
+        self.planner = planner
 
     def _is_heartbeat_due(
         self,
         heartbeat: Heartbeat,
         last_run_at: datetime | None,
     ) -> bool:
-        """Check if a heartbeat is due to run.
-
-        Args:
-            heartbeat: The heartbeat to check
-            last_run_at: When the heartbeat last ran (None if never)
-
-        Returns:
-            True if the heartbeat should run now
-        """
+        """Check if a heartbeat is due to run."""
         try:
-            # Use croniter to find the previous scheduled time
             now = datetime.now(UTC)
             cron = croniter(heartbeat.cron_expression, now)
             prev_scheduled = cron.get_prev(datetime)
 
-            # Make prev_scheduled timezone-aware
             if prev_scheduled.tzinfo is None:
                 prev_scheduled = prev_scheduled.replace(tzinfo=UTC)
 
-            # If never run, check if we're within 5 minutes of a scheduled time
             if last_run_at is None:
                 time_since_scheduled = now - prev_scheduled
                 return time_since_scheduled <= timedelta(minutes=5)
 
-            # If last run was before the previous scheduled time, it's due
             return last_run_at < prev_scheduled
 
         except Exception as e:
@@ -63,15 +64,7 @@ class HeartbeatWorker:
             return False
 
     def _expand_template(self, template: str, heartbeat: Heartbeat) -> str:
-        """Expand placeholders in the query template.
-
-        Args:
-            template: The query template with {placeholders}
-            heartbeat: The heartbeat for context
-
-        Returns:
-            Expanded query string
-        """
+        """Expand placeholders in the query template."""
         now = datetime.now(UTC)
         return template.format(
             date=now.strftime("%Y-%m-%d"),
@@ -87,18 +80,9 @@ class HeartbeatWorker:
         response: TaskResponse,
         run_id: str,
     ) -> bool:
-        """Call the webhook URL with the task result.
-
-        Args:
-            heartbeat: The heartbeat that triggered this
-            response: The task response
-            run_id: The heartbeat run ID
-
-        Returns:
-            True if webhook succeeded, False otherwise
-        """
+        """Call the webhook URL with the task result."""
         if not heartbeat.webhook_url:
-            return True  # No webhook configured, that's fine
+            return True
 
         payload = {
             "event": "heartbeat.completed",
@@ -140,14 +124,7 @@ class HeartbeatWorker:
             return False
 
     async def get_last_run_at(self, heartbeat_id) -> datetime | None:
-        """Get when a heartbeat last ran successfully.
-
-        Args:
-            heartbeat_id: The heartbeat ID
-
-        Returns:
-            Datetime of last successful run, or None if never ran
-        """
+        """Get when a heartbeat last ran successfully."""
         result = (
             self.db.client.table("heartbeat_runs")
             .select("completed_at")
@@ -164,15 +141,63 @@ class HeartbeatWorker:
                 return datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
         return None
 
-    async def process_heartbeat(self, heartbeat: Heartbeat) -> dict[str, Any]:
-        """Process a single heartbeat.
+    async def _execute_via_librarian(
+        self, query: str, context: TaskContext,
+    ) -> TaskResponse:
+        """Execute a heartbeat query through the Librarian pipeline.
 
-        Args:
-            heartbeat: The heartbeat to process
-
-        Returns:
-            Dict with run details
+        1. Planner chooses instrument based on query
+        2. Instrument executes directly (bypasses GeneralConductor routing)
+        3. Returns TaskResponse
         """
+        import time
+
+        # Step 1: Let the planner choose the instrument
+        if self.planner:
+            plan = await self.planner.plan(query)
+            instrument_name = (
+                plan.proposal.instrument
+                or (plan.proposal.steps[0].instrument if plan.proposal.steps else None)
+                or "research"
+            )
+        else:
+            # Fallback: use GeneralConductor's routing
+            instrument_name = await self.conductor.route(
+                TaskRequest(query=query, context=context)
+            )
+
+        # Step 2: Execute the instrument directly
+        instrument = self.conductor.instruments.get(instrument_name)
+        if instrument is None:
+            raise ValueError(f"Unknown instrument: {instrument_name}")
+
+        start_time = time.time()
+        result = await instrument.execute(query, context)
+        duration_ms = int((time.time() - start_time) * 1000)
+
+        # Step 3: Convert to TaskResponse
+        server_findings = [
+            Finding.model_validate(f.model_dump()) for f in (result.findings or [])
+        ]
+
+        return TaskResponse(
+            request_id=f"heartbeat-{datetime.now(UTC).isoformat()}",
+            outcome=result.outcome,
+            findings=server_findings,
+            summary=result.summary,
+            confidence=result.confidence,
+            metadata=ExecutionMetadata(
+                instrument_used=instrument_name,
+                iterations=result.iterations,
+                duration_ms=duration_ms,
+                sources_consulted=result.sources_consulted,
+            ),
+            discrepancy=result.discrepancy,
+            suggested_followups=result.suggested_followups,
+        )
+
+    async def process_heartbeat(self, heartbeat: Heartbeat) -> dict[str, Any]:
+        """Process a single heartbeat via the Librarian pipeline."""
         run_id = None
         try:
             # Create a run record
@@ -193,9 +218,8 @@ class HeartbeatWorker:
             # Build context from template
             context = TaskContext(**heartbeat.context_template)
 
-            # Execute the task
-            request = TaskRequest(query=query, context=context)
-            response = await self.conductor.execute(request)
+            # Execute via Librarian pipeline
+            response = await self._execute_via_librarian(query, context)
 
             # Update run as completed
             self.db.client.table("heartbeat_runs").update({
@@ -243,14 +267,9 @@ class HeartbeatWorker:
             }
 
     async def tick(self) -> dict[str, Any]:
-        """Process all due heartbeats.
-
-        Returns:
-            Dict with summary of what was processed
-        """
+        """Process all due heartbeats."""
         logger.info("Heartbeat tick starting")
 
-        # Get all active heartbeats
         result = (
             self.db.client.table("heartbeats")
             .select("*")

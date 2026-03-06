@@ -120,6 +120,7 @@ def get_heartbeat_worker() -> HeartbeatWorker:
         _heartbeat_worker = HeartbeatWorker(
             db=get_db_client(),
             conductor=get_conductor(),
+            planner=get_arrangement_planner(),
         )
     return _heartbeat_worker
 
