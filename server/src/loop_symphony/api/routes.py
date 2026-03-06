@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import time
 from typing import Annotated, AsyncIterator
 from uuid import UUID
 
@@ -37,10 +38,12 @@ from loop_symphony.models.saved_arrangement import (
     SavedArrangement,
 )
 from loop_symphony.models.process import ProcessType
+from loop_symphony.models.finding import ExecutionMetadata
 from loop_symphony.models.task import (
     TaskContext,
     TaskPendingResponse,
     TaskPlan,
+    TaskPreferences,
     TaskRequest,
     TaskResponse,
     TaskSubmitResponse,
@@ -1661,10 +1664,11 @@ async def room_heartbeat(
     found = room_registry.heartbeat(heartbeat)
 
     if not found:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Room not found: {heartbeat.room_id}. Please re-register.",
-        )
+        return {
+            "status": "needs_registration",
+            "room_id": heartbeat.room_id,
+            "message": "Room not found. Please re-register.",
+        }
 
     response: dict = {"status": "ok", "room_id": heartbeat.room_id}
 
@@ -2109,26 +2113,67 @@ async def librarian_execute(
         "plan_status": "running",
     })
 
-    # Build a TaskRequest from the brief
+    # Build a TaskRequest from the brief — pass ALL 7 fields so instruments can use them
+    brief_data = {
+        "deliverable": deliverable,
+        "context": brief_row.get("context"),
+        "proposed_approach": brief_row.get("proposed_approach"),
+        "tools_and_data": brief_row.get("tools_and_data"),
+        "exclusions": brief_row.get("exclusions"),
+        "precision": brief_row.get("precision"),
+        "intent": brief_row.get("intent"),
+        "conductor_context": brief_row.get("conductor_context"),
+    }
+
+    # Map precision field to thoroughness preference
+    precision = brief_row.get("precision", "") or ""
+    precision_lower = precision.lower()
+    if any(w in precision_lower for w in ("ballpark", "quick", "rough", "fast")):
+        thoroughness = "quick"
+    elif any(w in precision_lower for w in ("precise", "exact", "thorough", "detailed", "rigorous")):
+        thoroughness = "thorough"
+    else:
+        thoroughness = "balanced"
+
     task_request = TaskRequest(
         query=deliverable,
         context=TaskContext(
             conversation_summary=brief_row.get("context"),
+            goal=brief_row.get("intent"),
+            investigation_brief=brief_data,
+        ),
+        preferences=TaskPreferences(
+            thoroughness=thoroughness,
+            trust_level=1,
         ),
     )
 
     # Register task with task manager
     task_manager = get_task_manager()
-    await task_manager.register(task_request.id)
+    await task_manager.register_task(
+        task_id=str(task_request.id),
+        query=task_request.query,
+        instrument=conductor_name,
+    )
 
     # Create task in database
     await db.create_task(task_request)
 
-    # Execute in background
+    # Determine which instrument the Librarian plan chose
+    if plan.proposal.instrument:
+        instrument_name = plan.proposal.instrument
+    elif plan.proposal.steps:
+        instrument_name = plan.proposal.steps[0].instrument
+    else:
+        instrument_name = "research"
+
+    # Execute in background — directly with the planned instrument, no GeneralConductor
     background_tasks.add_task(
         _execute_librarian_task,
         task_request=task_request,
         conductor=conductor,
+        instrument_name=instrument_name,
+        plan=plan,
         db=db,
         event_bus=event_bus,
         artifact_id=artifact_id,
@@ -2139,13 +2184,15 @@ async def librarian_execute(
     return TaskSubmitResponse(
         task_id=task_request.id,
         status=TaskStatus.RUNNING.value,
-        message="Librarian investigation started",
+        message=f"Librarian investigation started (instrument: {instrument_name})",
     )
 
 
 async def _execute_librarian_task(
     task_request: TaskRequest,
     conductor: GeneralConductor,
+    instrument_name: str,
+    plan: LibrarianPlan,
     db: DatabaseClient,
     event_bus: EventBus,
     artifact_id: str,
@@ -2154,7 +2201,8 @@ async def _execute_librarian_task(
 ) -> None:
     """Background execution for a librarian-initiated task.
 
-    Executes the task, then writes results to the intelligence_artifacts table.
+    Runs the instrument chosen by the Librarian plan directly — bypasses
+    the GeneralConductor's keyword routing so the plan is respected.
     """
     task_id = task_request.id
     task_manager = get_task_manager()
@@ -2185,9 +2233,31 @@ async def _execute_librarian_task(
             })
 
         context = task_request.context or TaskContext()
-        task_request.context = context.model_copy(update={"checkpoint_fn": _checkpoint})
+        context = context.model_copy(update={"checkpoint_fn": _checkpoint})
 
-        response = await conductor.handle(task_request)
+        # Execute the planned instrument directly
+        instrument = conductor.instruments.get(instrument_name)
+        if instrument is None:
+            raise ValueError(f"Unknown instrument: {instrument_name}")
+
+        start_time = time.time()
+        result = await instrument.execute(task_request.query, context)
+        duration_ms = int((time.time() - start_time) * 1000)
+        response = TaskResponse(
+            request_id=task_id,
+            outcome=result.outcome,
+            findings=result.findings,
+            summary=result.summary,
+            confidence=result.confidence,
+            metadata=ExecutionMetadata(
+                instrument_used=instrument_name,
+                iterations=result.iterations,
+                duration_ms=duration_ms,
+                sources_consulted=result.sources_consulted,
+            ),
+            discrepancy=result.discrepancy,
+            suggested_followups=result.suggested_followups,
+        )
 
         # Complete the task in the database
         await db.complete_task(task_id, response)
@@ -2208,14 +2278,33 @@ async def _execute_librarian_task(
         if intent and conclusion:
             conclusion = f"Regarding '{intent}': {conclusion}"
 
-        # Build full reasoning JSON
+        # Build full reasoning JSON — includes everything Kiloa needs to display
         full_reasoning = {
             "summary": response.summary,
             "findings": [
-                {"content": f.content, "confidence": f.confidence}
+                {
+                    "content": f.content,
+                    "confidence": f.confidence,
+                    "source": f.source,
+                }
                 for f in (response.findings or [])
             ],
             "metadata": response.metadata.model_dump(mode="json") if response.metadata else {},
+            "plan": {
+                "instrument": instrument_name,
+                "type": plan.proposal.type,
+                "rationale": plan.proposal.rationale,
+                "estimated_iterations": plan.estimated_duration_seconds,
+            },
+            "original_query": task_request.query,
+            "execution": {
+                "instrument_used": instrument_name,
+                "iterations": result.iterations,
+                "outcome": result.outcome.value,
+                "duration_ms": duration_ms,
+                "sources_consulted": result.sources_consulted,
+                "suggested_followups": result.suggested_followups,
+            },
         }
 
         # Update intelligence artifact to complete

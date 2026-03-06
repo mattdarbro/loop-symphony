@@ -28,6 +28,10 @@ class TaskContext(BaseModel):
     goal: str | None = None
     intent: Intent | None = None
 
+    # Full 7-field investigation brief from the Librarian pipeline.
+    # Instruments use this to guide search, set depth, frame findings.
+    investigation_brief: dict | None = None
+
 
 class TaskPreferences(BaseModel):
     """User preferences for task execution."""

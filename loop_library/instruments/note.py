@@ -57,16 +57,39 @@ class NoteInstrument(BaseInstrument):
         )
         if context and context.conversation_summary:
             base += f"\n\nConversation context: {context.conversation_summary}"
+
+        # Use investigation brief to enrich the system prompt
+        if context and context.investigation_brief:
+            brief = context.investigation_brief
+            if brief.get("intent"):
+                base += f"\n\nFrame your answer around this decision context: {brief['intent']}"
+            if brief.get("exclusions"):
+                base += f"\n\nDo NOT cover: {brief['exclusions']}"
+            if brief.get("precision"):
+                base += f"\n\nPrecision requirement: {brief['precision']}"
+
         return base
 
     def _build_prompt(self, query: str, context: TaskContext | None) -> str:
         prompt = query
+        additions = []
+
         if context:
-            additions = []
             if context.location:
                 additions.append(f"User location: {context.location}")
             if context.attachments:
                 additions.append(f"Attachments: {len(context.attachments)} provided")
-            if additions:
-                prompt = f"{query}\n\n[Context: {'; '.join(additions)}]"
+
+            # Add brief context to the prompt
+            if context.investigation_brief:
+                brief = context.investigation_brief
+                if brief.get("context"):
+                    additions.append(f"Background: {brief['context']}")
+                if brief.get("proposed_approach"):
+                    additions.append(f"User's suggested approach: {brief['proposed_approach']}")
+                if brief.get("tools_and_data"):
+                    additions.append(f"Relevant tools/data: {brief['tools_and_data']}")
+
+        if additions:
+            prompt = f"{query}\n\n[Context: {'; '.join(additions)}]"
         return prompt

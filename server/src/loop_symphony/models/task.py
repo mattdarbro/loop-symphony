@@ -30,6 +30,10 @@ class TaskContext(BaseModel):
     goal: str | None = None  # e.g., "planning a trip", "making a purchase decision"
     intent: Intent | None = None  # Structured intent (decision, research, action, etc.)
 
+    # Full 7-field investigation brief from the Librarian pipeline.
+    # Instruments use this to guide search, set depth, frame findings.
+    investigation_brief: dict | None = None
+
 
 class TaskPreferences(BaseModel):
     """User preferences for task execution."""

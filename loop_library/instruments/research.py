@@ -54,6 +54,9 @@ class ResearchInstrument(BaseInstrument):
     ) -> InstrumentResult:
         logger.info(f"Research instrument executing: {query[:50]}...")
 
+        # Let the investigation brief control iteration depth
+        max_iter = self._max_iterations_from_brief(context)
+
         findings: list[Finding] = []
         sources_consulted: list[str] = []
         confidence_history: list[float] = []
@@ -66,7 +69,7 @@ class ResearchInstrument(BaseInstrument):
 
         checkpoint_fn = context.checkpoint_fn if context else None
 
-        while iteration < self.max_iterations:
+        while iteration < max_iter:
             iteration += 1
             iteration_start = time.time()
             logger.info(f"Research iteration {iteration}/{self.max_iterations}")
@@ -120,7 +123,13 @@ class ResearchInstrument(BaseInstrument):
                 logger.info(f"Terminating: {result.reason}")
                 break
 
-        summary, has_contradictions, hint = await self._synthesize_findings(query, findings)
+            # Early exit: if confidence is already high after iteration 2, stop
+            if iteration >= 2 and confidence >= 0.85:
+                outcome = Outcome.COMPLETE
+                logger.info(f"Early exit: confidence {confidence:.2f} >= 0.85 after iteration {iteration}")
+                break
+
+        summary, has_contradictions, hint = await self._synthesize_findings(query, findings, context)
 
         confidence = confidence_history[-1] if confidence_history else 0.0
         discrepancy = None
@@ -149,6 +158,43 @@ class ResearchInstrument(BaseInstrument):
             suggested_followups=followups,
         )
 
+    def _max_iterations_from_brief(self, context: TaskContext | None) -> int:
+        """Determine max iterations from the investigation brief's precision field."""
+        if not context or not context.investigation_brief:
+            return self.max_iterations
+
+        precision = (context.investigation_brief.get("precision") or "").lower()
+        if any(w in precision for w in ("ballpark", "quick", "rough", "fast")):
+            return min(2, self.max_iterations)
+        if any(w in precision for w in ("precise", "exact", "thorough", "detailed", "rigorous")):
+            return self.max_iterations  # Use full depth
+        return min(3, self.max_iterations)  # Default: balanced
+
+    def _build_brief_context(self, context: TaskContext | None) -> str:
+        """Build research guidance from the full investigation brief."""
+        if not context or not context.investigation_brief:
+            return ""
+
+        brief = context.investigation_brief
+        sections = []
+
+        if brief.get("context"):
+            sections.append(f"Background context: {brief['context']}")
+        if brief.get("proposed_approach"):
+            sections.append(f"The user suggests this approach: {brief['proposed_approach']}")
+        if brief.get("tools_and_data"):
+            sections.append(f"Prefer these sources and tools: {brief['tools_and_data']}")
+        if brief.get("exclusions"):
+            sections.append(f"DO NOT research or include: {brief['exclusions']}")
+        if brief.get("precision"):
+            sections.append(f"Precision requirement: {brief['precision']}")
+        if brief.get("intent"):
+            sections.append(f"Frame all findings around this decision context: {brief['intent']}")
+        if brief.get("conductor_context"):
+            sections.append(f"Domain focus: {brief['conductor_context']}")
+
+        return "\n".join(sections)
+
     async def _define_problem(self, query: str, context: TaskContext | None) -> str:
         system = (
             "You are a research planner. Your job is to clearly define the research "
@@ -161,6 +207,10 @@ class ResearchInstrument(BaseInstrument):
                 context_str += f"\nConversation context: {context.conversation_summary}"
             if context.location:
                 context_str += f"\nUser location: {context.location}"
+
+        brief_context = self._build_brief_context(context)
+        if brief_context:
+            context_str += f"\n\nInvestigation brief:\n{brief_context}"
 
         prompt = f"""Define the research problem for this query:
 
@@ -227,13 +277,20 @@ Generate 2-3 search queries. Return ONLY the queries, one per line, no numbering
         return findings, sources
 
     async def _synthesize_findings(
-        self, query: str, findings: list[Finding]
+        self, query: str, findings: list[Finding], context: TaskContext | None = None,
     ) -> tuple[str, bool, str | None]:
         if not findings:
             return "No findings were discovered during research.", False, None
 
+        # Frame synthesis around the intent if available
+        synthesis_query = query
+        if context and context.investigation_brief:
+            intent = context.investigation_brief.get("intent")
+            if intent:
+                synthesis_query = f"{query}\n\nFrame the synthesis around this decision context: {intent}"
+
         findings_text = [f.content for f in findings]
-        result = await self.claude.synthesize_with_analysis(findings_text, query)
+        result = await self.claude.synthesize_with_analysis(findings_text, synthesis_query)
         return (
             result["summary"],
             result["has_contradictions"],
