@@ -38,7 +38,7 @@ from loop_symphony.models.saved_arrangement import (
     SavedArrangement,
 )
 from loop_symphony.models.process import ProcessType
-from loop_symphony.models.finding import ExecutionMetadata
+from loop_symphony.models.finding import ExecutionMetadata, Finding
 from loop_symphony.models.task import (
     TaskContext,
     TaskPendingResponse,
@@ -2243,10 +2243,17 @@ async def _execute_librarian_task(
         start_time = time.time()
         result = await instrument.execute(task_request.query, context)
         duration_ms = int((time.time() - start_time) * 1000)
+
+        # Convert loop_library Finding instances to server Finding instances
+        # (identical schema, different module paths — Pydantic rejects cross-package models)
+        server_findings = [
+            Finding.model_validate(f.model_dump()) for f in (result.findings or [])
+        ]
+
         response = TaskResponse(
             request_id=task_id,
             outcome=result.outcome,
-            findings=result.findings,
+            findings=server_findings,
             summary=result.summary,
             confidence=result.confidence,
             metadata=ExecutionMetadata(
